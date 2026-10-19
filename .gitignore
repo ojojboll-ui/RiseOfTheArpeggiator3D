@@ -1,0 +1,19 @@
+# Godot
+.godot/
+*.import
+
+# The extension's build and its output (build with gdext\build.bat)
+gdext/build/
+gdext/build.log
+bin/*.dll
+bin/*.pdb
+bin/*.exp
+bin/*.lib
+bin/~*
+
+# Offline tests and test runs
+*.exe
+*.obj
+*.wav
+out/
+shots/

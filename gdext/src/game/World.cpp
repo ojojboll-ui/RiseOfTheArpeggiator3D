@@ -1,0 +1,974 @@
+#include "World.h"
+
+#include <cstdio>
+
+namespace np
+{
+    using audio::Command;
+    using audio::Event;
+
+    //==========================================================================
+    // Looks
+
+    Color levelTint (int level)
+    {
+        static const Color tints[3] { { 0.22f, 0.36f, 1.0f }, { 0.50f, 1.0f, 0.18f }, { 0.85f, 0.25f, 1.0f } };
+        return tints[std::clamp (level, 0, 2)];
+    }
+
+    Color levelAccent (int level)
+    {
+        static const Color accents[3] { { 0.35f, 0.85f, 1.0f }, { 1.0f, 0.95f, 0.25f }, { 1.0f, 0.45f, 0.85f } };
+        return accents[std::clamp (level, 0, 2)];
+    }
+
+    /** One colour per wheel slot, so the harmony can be seen: the ship's
+        exhaust, the bullets and the bursts all wear the chord they belong to. */
+    Color World::chordColor (int slot)
+    {
+        static const Color c[4] { { 0.25f, 0.92f, 1.0f },     // i    up
+                                  { 1.0f, 0.30f, 0.85f },     // VI   right
+                                  { 1.0f, 0.72f, 0.18f },     // III  down
+                                  { 0.42f, 1.0f, 0.40f } };   // VII  left
+        return c[slot & 3];
+    }
+
+    Color World::enemyColor (EnemyKind k)
+    {
+        switch (k)
+        {
+            case EnemyKind::wanderer: return { 0.72f, 0.38f, 1.0f };
+            case EnemyKind::seeker:   return { 0.25f, 0.82f, 1.0f };
+            case EnemyKind::dodger:   return { 0.30f, 1.0f, 0.42f };
+            case EnemyKind::splitter: return { 1.0f, 0.30f, 0.80f };
+            case EnemyKind::shard:    return { 1.0f, 0.55f, 0.85f };
+            case EnemyKind::well:     return { 1.0f, 0.36f, 0.14f };
+        }
+        return {};
+    }
+
+    namespace
+    {
+        constexpr float kSparkGravity = 1800.0f;
+
+        // How big a chord each kind lets out: 0 bright and short, 2 dark and long.
+        int chordSize (EnemyKind k)
+        {
+            switch (k)
+            {
+                case EnemyKind::wanderer: case EnemyKind::shard: return 0;
+                case EnemyKind::well:                            return 2;
+                default:                                         return 1;
+            }
+        }
+
+        Vec2 clampToField (Vec2 p, float margin)
+        {
+            return { std::clamp (p.x, kFieldL + margin, kFieldR - margin),
+                     std::clamp (p.y, kFieldT + margin, kFieldB - margin) };
+        }
+
+        const Vec2 kCentre { (kFieldL + kFieldR) * 0.5f, (kFieldT + kFieldB) * 0.5f };
+    }
+
+    //==========================================================================
+
+    void World::start (int levelIn, int difficultyIn)
+    {
+        diff = std::clamp (difficultyIn, 0, 2);
+        level = std::clamp (levelIn, 0, 2);
+        state = Phase::playing;
+
+        grid.build (kFieldL, kFieldT, kFieldR, kFieldB, 40.0f);
+
+        ship = {};
+        ship.pos = kCentre;
+        ship.invulnerable = 1.5f;
+
+        enemies.clear(); incoming.clear(); bullets.clear(); particles.clear();
+        pickups.clear(); popups.clear(); rings.clear();
+        enemies.reserve (256); bullets.reserve (512); particles.reserve (8192);
+
+        points = 0; lives = difficulty (diff).lives; bombs = difficulty (diff).bombs; multiplier = 1; killsSinceDeath = 0;
+        nextLifeAt = kLifeEvery; nextBombAt = kBombEvery;
+        wheelSlot = audio::song (level).homeSlot;
+        deadTime = time = clearedTime = 0.0f;
+        lastKicks = band.pubKicks.load();
+        lastHalfBars = 0;
+        slowMeter = 1.0f; timeScale = 1.0f; slowActive = false; slowProgress = 0.0f;
+        kickPulse = chordFlash = flashAmount = shakeAmount = 0.0f;
+        banner = audio::song (level).name; bannerLife = 2.5f; bannerColor = levelAccent (level);
+
+        band.requestedChord = wheelSlot;   // the song starts on its tonic
+        band.firing = false;
+        // A fresh arpeggio direction at every start, for songs that draw one;
+        // the seed is the World's, given by whoever made it.
+        band.post ({ Command::start, level, (int) (rng.next() % 4u) });
+    }
+
+    //==========================================================================
+    // Events from the band
+
+    void World::onEvent (const Event& e)
+    {
+        switch (e.type)
+        {
+            case Event::shot:
+                if (state == Phase::playing && ship.alive)
+                    spawnShot (e.a, e.b, e.c, e.d != 0);
+                break;
+
+            case Event::bar:
+                if (state == Phase::playing) spawnWave (e.a, false);
+                break;
+
+            case Event::chord:
+                chordFlash = 1.0f;
+                break;
+
+            case Event::layerUp:
+                banner = std::string ("+ ") + audio::layerName (audio::song (level), e.a);
+                bannerLife = 2.2f; bannerColor = levelAccent (level);
+                flashAmount = std::max (flashAmount, 0.35f);
+                grid.push (ship.pos, 900.0f, 700.0f);
+                break;
+
+            case Event::layerDown:
+                banner = std::string ("- ") + audio::layerName (audio::song (level), e.a + 1);
+                bannerLife = 2.2f; bannerColor = { 1.0f, 0.25f, 0.2f };
+                break;
+
+            case Event::dropEnd:
+                if (state == Phase::dead) respawn();
+                break;
+
+            case Event::songEnd:
+                if (state == Phase::playing || state == Phase::dead)
+                {
+                    state = Phase::cleared;
+                    clearedTime = 0.0f;
+                    for (auto& en : enemies) if (en.alive) kill (en, 0, false, false);
+                    const int bonus = lives * 5000 + bombs * 2000;
+                    points += bonus;
+                    banner = "LEVEL CLEAR"; bannerLife = 1.0e9f; bannerColor = levelAccent (level);
+                    for (int i = 0; i < 6; ++i)
+                        explode (kCentre + rng.inDisc (500.0f), chordColor (i), levelAccent (level), 140, 900.0f, 2.0f);
+                }
+                break;
+        }
+    }
+
+    //==========================================================================
+
+    void World::update (float dt, const Controls& in)
+    {
+        time += dt;
+
+        // The kick, as the band counts them.
+        const int kicks = band.pubKicks.load();
+        if (kicks != lastKicks)
+        {
+            lastKicks = kicks;
+            kickPulse = 1.0f;
+            if (ship.alive) grid.push (ship.pos, 160.0f, 260.0f);
+            for (const auto& e : enemies)
+                if (e.alive && e.kind == EnemyKind::well && e.spawn <= 0.0f) grid.pull (e.pos, 220.0f, 260.0f);
+        }
+
+        // From the third layer on, a second, smaller wave lands on every half bar.
+        const int halfBars = (int) (band.beatPosition() / 2.0);
+        if (halfBars != lastHalfBars)
+        {
+            lastHalfBars = halfBars;
+            if (halfBars % 2 == 1 && band.pubLayer.load() >= difficulty (diff).halfBarLayer && state == Phase::playing)
+                spawnWave (halfBars / 2, true);
+        }
+
+        kickPulse *= std::exp (-dt * 7.0f);
+        chordFlash *= std::exp (-dt * 5.0f);
+        flashAmount *= std::exp (-dt * 4.0f);
+        bannerLife -= dt;
+
+        shakeAmount *= std::exp (-dt * 9.0f);
+        shakeVec = shakeAmount > 0.3f ? rng.inDisc (shakeAmount) : Vec2 {};
+
+        if (state == Phase::playing)
+        {
+            // The ship slows with the world, but less than the enemies do; its
+            // shots keep their speed (2026-10-10).
+            const float slowAmount = std::clamp ((1.0f - timeScale) / (1.0f - kSlowSpeed), 0.0f, 1.0f);
+            updateShip (dt * (1.0f - (1.0f - kSlowShipSpeed) * slowAmount), in);
+
+            if (in.bomb) detonateBomb();
+
+            // Slow motion: needs a little in the meter to start, runs it dry.
+            const bool want = in.slow && ship.alive && (slowActive ? slowMeter > 0.0f : slowMeter > 0.15f);
+            setSlow (want);
+            if (slowActive)
+            {
+                slowMeter = std::max (0.0f, slowMeter - kSlowDrain * dt);
+                slowProgress = std::clamp ((slowStartMeter - slowMeter) / slowStartMeter, 0.0f, 1.0f);
+            }
+        }
+        else
+        {
+            band.firing = false;
+            setSlow (false);
+        }
+
+        // The world's clock eases between full speed and slow, so it never jerks.
+        timeScale += ((slowActive ? kSlowSpeed : 1.0f) - timeScale) * std::min (1.0f, dt * 12.0f);
+        const float realDt = dt;
+        dt *= timeScale;
+
+        // The band's slow filter: a noticeable but gentle dip as slow motion
+        // starts (30% of the way, about 6 kHz), then down with the zoom on the
+        // same logarithmic course, sent whenever it has moved (2026-10-14).
+        {
+            const float depth = slowAmount() * (kSlowDip + (1.0f - kSlowDip) * slowProgress);
+            if (std::abs (depth - sentSlowDepth) > 0.002f || (depth == 0.0f && sentSlowDepth != 0.0f))
+            {
+                sentSlowDepth = depth;
+                band.post ({ Command::slow, depth > 0.0f ? 1 : 0, 0, depth });
+            }
+        }
+
+        if (state == Phase::dead)
+        {
+            deadTime += dt;
+            // The band brings the ship back when the music returns; this is
+            // only for when the music cannot (the song ended mid-drop).
+            if (deadTime > 6.0f) respawn();
+        }
+
+        if (state == Phase::cleared) clearedTime += dt;
+
+        updateEnemies (dt);
+        updateBullets (realDt);   // the shots are the player's, so they keep full speed
+        updatePickups (dt);
+        collide();
+        updateParticles (dt);
+        grid.update (dt);
+
+        for (auto& p : popups) { p.life -= dt; p.pos.y -= 40.0f * dt; }
+        popups.erase (std::remove_if (popups.begin(), popups.end(), [] (const Popup& p) { return p.life <= 0.0f; }), popups.end());
+
+        for (auto& r : rings) { r.radius += r.speed * dt; r.life -= dt; }
+        rings.erase (std::remove_if (rings.begin(), rings.end(), [] (const Ring& r) { return r.life <= 0.0f; }), rings.end());
+
+        enemies.erase (std::remove_if (enemies.begin(), enemies.end(), [] (const Enemy& e) { return ! e.alive; }), enemies.end());
+        enemies.insert (enemies.end(), incoming.begin(), incoming.end());
+        incoming.clear();
+        bullets.erase (std::remove_if (bullets.begin(), bullets.end(), [] (const Bullet& b) { return ! b.alive; }), bullets.end());
+        pickups.erase (std::remove_if (pickups.begin(), pickups.end(), [] (const Pickup& p) { return ! p.alive; }), pickups.end());
+    }
+
+    void World::setSlow (bool on)
+    {
+        if (on == slowActive) return;
+        slowActive = on;
+        if (on) { slowStartMeter = std::max (0.01f, slowMeter); slowProgress = 0.0f; }
+    }
+
+    void World::updateAmbient (float dt)
+    {
+        time += dt;
+
+        const int kicks = band.pubKicks.load();
+        if (kicks != lastKicks) { lastKicks = kicks; kickPulse = 1.0f; }
+        kickPulse *= std::exp (-dt * 7.0f);
+
+        // A slow drift of disturbances so the menu floor is never still.
+        if (rng.chance (dt * 1.4f))
+        {
+            const Vec2 p = kCentre + Vec2 { rng.range (-800.0f, 800.0f), rng.range (-420.0f, 420.0f) };
+            grid.push (p, rng.range (300.0f, 700.0f), 220.0f);
+            explode (p, hsv (rng.unit(), 0.7f, 1.0f), hsv (rng.unit(), 0.5f, 1.0f), 40, 500.0f, 1.2f);
+        }
+
+        updateParticles (dt);
+        grid.update (dt);
+    }
+
+    //==========================================================================
+    // Ship
+
+    void World::updateChordRequest (Vec2 move)
+    {
+        // The wheel reads the stick only when it is clearly pushed, and keeps
+        // the current chord until the stick is well inside a neighbour's
+        // quarter — 12 degrees past the boundary. Dodging back and forth over
+        // a diagonal does not flip the harmony on every beat.
+        if (move.length() < 0.5f) return;
+
+        const float angle = std::atan2 (move.x, -move.y);     // 0 up, clockwise
+        const float centre = (float) wheelSlot * kPi * 0.5f;
+        const float hysteresis = (45.0f + 12.0f) * kPi / 180.0f;
+
+        if (std::abs (angleDiff (angle, centre)) > hysteresis)
+        {
+            float a = std::fmod (angle + kTau + kPi * 0.25f, kTau);
+            wheelSlot = (int) (a / (kPi * 0.5f)) & 3;
+        }
+
+        band.requestedChord = wheelSlot;
+    }
+
+    void World::updateShip (float dt, const Controls& in)
+    {
+        if (! ship.alive) { band.firing = false; return; }
+
+        // Speed follows deflection with a slight curve, so small corrections
+        // are fine; this is a position control, not something heard.
+        Vec2 move = in.move;
+        const float m = std::min (1.0f, move.length());
+        if (m > 0.0f) move = move.normalised() * std::pow (m, 1.3f);
+
+        const Vec2 target = move * kShipSpeed;
+        ship.vel += (target - ship.vel) * std::min (1.0f, dt * 14.0f);
+        ship.pos += ship.vel * dt;
+
+        // Wells pull the ship as well.
+        for (const auto& e : enemies)
+        {
+            if (! e.alive || e.kind != EnemyKind::well || e.spawn > 0.0f) continue;
+            const Vec2 d = e.pos - ship.pos;
+            const float dist = d.length();
+            if (dist < 420.0f && dist > 1.0f) ship.pos += d / dist * (120.0f * (1.0f - dist / 420.0f) * dt);
+        }
+
+        ship.pos = clampToField (ship.pos, 18.0f);
+
+        if (ship.vel.length() > 40.0f)
+        {
+            const float want = ship.vel.angle();
+            ship.angle += angleDiff (want, ship.angle) * std::min (1.0f, dt * 16.0f);
+
+            // Exhaust in the colour of the chord being played.
+            const int n = (int) (ship.vel.length() / kShipSpeed * 3.0f) + 1;
+            const Color c = chordColor (band.pubChord.load());
+            for (int i = 0; i < n; ++i)
+            {
+                Particle p;
+                p.pos = ship.pos - fromAngle (ship.angle, 14.0f);
+                p.vel = -ship.vel.normalised() * rng.range (150.0f, 380.0f) + rng.inDisc (90.0f);
+                p.color = c.withAlpha (0.7f);
+                p.life = p.maxLife = rng.range (0.25f, 0.55f);
+                p.width = 2.2f;
+                p.drag = 0.9f;
+                p.z = 10.0f;
+                p.vz = rng.range (-20.0f, 60.0f);
+                particles.push_back (p);
+            }
+        }
+
+        if (ship.invulnerable > 0.0f) ship.invulnerable -= dt;
+
+        updateChordRequest (in.move);
+
+        const bool firing = in.fire && in.aim.length() > 0.2f;
+        band.firing = firing;
+        if (firing) aimDir = in.aim.normalised();
+        // The camera follows the ship, so the arpeggio pans with the aim instead
+        // of the ship's place on the field.
+        band.aimPan = 0.5f + 0.2f * aimDir.x;
+    }
+
+    void World::spawnShot (int note, int chord, int index, bool accent)
+    {
+        const int rate = band.pubArpRate.load();
+        const float base = aimDir.angle();
+
+        // The arpeggio fans the shots a little: each step of the cycle leaves
+        // at its own angle, so a run up the chord is a sweep across the aim.
+        const float fan = ((float) index / 100.0f - 0.5f) * 0.084f;   // index is the place in the arp cycle, 0..100
+        const Color c = chordColor (chord);
+
+        auto fire = [&] (float angle, Vec2 offset)
+        {
+            Bullet b;
+            b.pos = ship.pos + fromAngle (base, 20.0f) + offset;
+            b.vel = fromAngle (angle, kBulletSpeed);
+            b.chord = chord;
+            b.note = note;
+            b.accent = accent;
+            bullets.push_back (b);
+        };
+
+        if (rate == 0)
+        {
+            for (int k = -1; k <= 1; ++k) fire (base + fan + 0.10f * (float) k, {});
+        }
+        else
+        {
+            const Vec2 side = fromAngle (base + kPi * 0.5f, 8.0f);
+            fire (base + fan, side);
+            fire (base + fan, -side);
+            if (rate == 2) fire (base + fan, {});
+        }
+
+        Particle flashP;
+        flashP.pos = ship.pos + fromAngle (base, 26.0f);
+        flashP.vel = fromAngle (base, 300.0f);
+        flashP.color = c.withAlpha (accent ? 1.0f : 0.6f);
+        flashP.life = flashP.maxLife = 0.08f;
+        flashP.width = accent ? 9.0f : 6.0f;
+        particles.push_back (flashP);
+    }
+
+    //==========================================================================
+    // Enemies
+
+    void World::spawnEnemy (EnemyKind kind, Vec2 pos, float delay)
+    {
+        if (enemies.size() + incoming.size() >= 220) return;
+
+        Enemy e;
+        e.kind = kind;
+        e.pos = clampToField (pos, 30.0f);
+        e.spawn = 0.7f + delay;
+        e.angle = rng.range (0.0f, kTau);
+        e.wander = rng.range (0.0f, kTau);
+
+        switch (kind)
+        {
+            case EnemyKind::wanderer: e.radius = 20.0f; e.value = 25;  e.spin = 3.0f; break;
+            case EnemyKind::seeker:   e.radius = 18.0f; e.value = 50;  break;
+            case EnemyKind::dodger:   e.radius = 19.0f; e.value = 100; e.spin = 1.2f; break;
+            case EnemyKind::splitter: e.radius = 22.0f; e.value = 75;  e.spin = 1.5f; break;
+            case EnemyKind::shard:    e.radius = 10.0f; e.value = 50;  e.spin = 6.0f; e.spawn = delay; break;
+            case EnemyKind::well:     e.radius = 26.0f; e.value = 300; e.hp = 14.0f; break;
+        }
+
+        incoming.push_back (e);
+    }
+
+    Vec2 World::farPoint (float minDist)
+    {
+        for (int tries = 0; tries < 30; ++tries)
+        {
+            const Vec2 p { rng.range (kFieldL + 60.0f, kFieldR - 60.0f), rng.range (kFieldT + 60.0f, kFieldB - 60.0f) };
+            if ((p - ship.pos).length() >= minDist) return p;
+        }
+        return { ship.pos.x < kCentre.x ? kFieldR - 80.0f : kFieldL + 80.0f, kCentre.y };
+    }
+
+    void World::spawnWave (int bar, bool half)
+    {
+        // The first bar is a breath: kick and bass, nothing to shoot.
+        if (bar < 1 || ! ship.alive) return;
+
+        const int layer = band.pubLayer.load();
+        const float intensity = (0.5f * (float) level + 0.35f * (float) layer + (float) bar / 28.0f) * difficulty (diff).spawn;
+        const int full = std::min ((int) (18.0f * difficulty (diff).spawn), std::max (2, (int) ((3.0f + intensity * 2.2f) * std::sqrt (difficulty (diff).spawn))));
+        const int budget = half ? std::max (2, full / 2) : full;
+
+        int wells = 0;
+        for (const auto& e : enemies) if (e.alive && e.kind == EnemyKind::well) ++wells;
+
+        // What this level's floor can throw. Each level adds a kind.
+        struct Option { int kind; float weight; };
+        std::vector<Option> options {
+            { 0, 1.0f },                                  // wanderers along an edge
+            { 1, 1.0f },                                  // seekers from the corners
+            { 2, level >= 0 ? 0.7f : 0.0f },              // dodgers in a cluster
+            { 3, level >= 1 ? 0.6f : 0.0f },              // splitters
+            { 4, ! half && (level >= 2 || (level == 1 && layer >= 3)) && wells < 2 ? 0.25f : 0.0f },   // a well
+            { 5, ! half && intensity > 2.5f && bar % 8 == 4 ? 2.0f : 0.0f }                             // a ring round the ship
+        };
+
+        float total = 0.0f;
+        for (const auto& o : options) total += o.weight;
+        float pick = rng.range (0.0f, total);
+        int choice = 0;
+        for (const auto& o : options) { if ((pick -= o.weight) <= 0.0f) { choice = o.kind; break; } }
+
+        switch (choice)
+        {
+            case 0:
+            {
+                const int edge = rng.below (4);
+                for (int i = 0; i < budget; ++i)
+                {
+                    const float t = ((float) i + 0.5f) / (float) budget;
+                    Vec2 p;
+                    if (edge == 0) p = { lerp (kFieldL, kFieldR, t), kFieldT + 40.0f };
+                    if (edge == 1) p = { kFieldR - 40.0f, lerp (kFieldT, kFieldB, t) };
+                    if (edge == 2) p = { lerp (kFieldL, kFieldR, t), kFieldB - 40.0f };
+                    if (edge == 3) p = { kFieldL + 40.0f, lerp (kFieldT, kFieldB, t) };
+                    spawnEnemy (EnemyKind::wanderer, p, 0.04f * (float) i);
+                }
+                break;
+            }
+
+            case 1:
+            {
+                const Vec2 corners[4] { { kFieldL + 60, kFieldT + 60 }, { kFieldR - 60, kFieldT + 60 },
+                                        { kFieldR - 60, kFieldB - 60 }, { kFieldL + 60, kFieldB - 60 } };
+                const int per = std::max (1, budget / 4);
+                for (const auto& c : corners)
+                {
+                    if ((c - ship.pos).length() < 300.0f) continue;
+                    for (int i = 0; i < per; ++i) spawnEnemy (EnemyKind::seeker, c + rng.inDisc (40.0f), 0.08f * (float) i);
+                }
+                break;
+            }
+
+            case 2:
+            {
+                const Vec2 c = farPoint (500.0f);
+                for (int i = 0; i < std::max (2, budget * 2 / 3); ++i)
+                    spawnEnemy (EnemyKind::dodger, c + rng.inDisc (90.0f), 0.05f * (float) i);
+                break;
+            }
+
+            case 3:
+            {
+                for (int i = 0; i < std::max (1, budget / 3); ++i)
+                    spawnEnemy (EnemyKind::splitter, farPoint (450.0f), 0.1f * (float) i);
+                break;
+            }
+
+            case 4:
+                spawnEnemy (EnemyKind::well, farPoint (550.0f));
+                for (int i = 0; i < budget / 2; ++i) spawnEnemy (EnemyKind::wanderer, farPoint (400.0f), 0.1f * (float) i);
+                break;
+
+            case 5:
+            {
+                const int n = std::min (12, budget);
+                for (int i = 0; i < n; ++i)
+                    spawnEnemy (EnemyKind::seeker, ship.pos + fromAngle (kTau * (float) i / (float) n, 470.0f), 0.3f);
+                break;
+            }
+        }
+    }
+
+    void World::updateEnemies (float dt)
+    {
+        const int layer = band.pubLayer.load();
+        const float speedUp = (1.0f + 0.08f * (float) level + 0.03f * (float) layer) * difficulty (diff).speed;
+        const Vec2 target = ship.alive ? ship.pos : kCentre;
+
+        for (auto& e : enemies)
+        {
+            if (! e.alive) continue;
+
+            e.flash = std::max (0.0f, e.flash - dt * 6.0f);
+            e.angle += e.spin * dt;
+
+            if (e.spawn > 0.0f) { e.spawn -= dt; continue; }
+
+            const Vec2 toShip = target - e.pos;
+            const float dist = std::max (1.0f, toShip.length());
+
+            switch (e.kind)
+            {
+                case EnemyKind::wanderer:
+                {
+                    e.wander += rng.range (-2.5f, 2.5f) * dt;
+                    const Vec2 want = fromAngle (e.wander, 150.0f * speedUp);
+                    e.vel += (want - e.vel) * std::min (1.0f, dt * 2.0f);
+                    break;
+                }
+
+                case EnemyKind::seeker:
+                {
+                    const Vec2 want = toShip / dist * (230.0f * speedUp);
+                    e.vel += (want - e.vel) * std::min (1.0f, dt * 2.5f);
+                    e.angle = e.vel.angle();
+                    break;
+                }
+
+                case EnemyKind::dodger:
+                {
+                    Vec2 want = toShip / dist * (210.0f * speedUp);
+
+                    // Sidestep any bullet heading this way.
+                    for (const auto& b : bullets)
+                    {
+                        const Vec2 d = e.pos - b.pos;
+                        const float bd = d.length();
+                        if (bd < 140.0f && dot (d, b.vel) > 0.0f)
+                        {
+                            const Vec2 side = b.vel.normalised().perp();
+                            want += side * (dot (side, d) > 0.0f ? 520.0f : -520.0f);
+                            break;
+                        }
+                    }
+                    e.vel += (want - e.vel) * std::min (1.0f, dt * 6.0f);
+                    break;
+                }
+
+                case EnemyKind::splitter:
+                {
+                    const Vec2 want = toShip / dist * (150.0f * speedUp);
+                    e.vel += (want - e.vel) * std::min (1.0f, dt * 1.6f);
+                    break;
+                }
+
+                case EnemyKind::shard:
+                {
+                    // Circle in on the ship rather than straight at it.
+                    const Vec2 want = (toShip / dist + toShip.perp() / dist * 0.8f).normalised() * (300.0f * speedUp);
+                    e.vel += (want - e.vel) * std::min (1.0f, dt * 3.0f);
+                    break;
+                }
+
+                case EnemyKind::well:
+                {
+                    e.vel *= std::exp (-dt * 1.5f);
+                    e.radius = 26.0f + e.eaten * 1.6f + 4.0f * kickPulse;
+                    grid.pull (e.pos, 30.0f * dt * 60.0f * 0.25f, 220.0f);
+
+                    // Swallow anything that strays too close.
+                    for (auto& o : enemies)
+                    {
+                        if (&o == &e || ! o.alive || o.kind == EnemyKind::well || o.spawn > 0.0f) continue;
+                        const Vec2 d = e.pos - o.pos;
+                        const float od = d.length();
+                        if (od < 360.0f && od > 1.0f) o.vel += d / od * (900.0f * (1.0f - od / 360.0f) * dt);
+                        if (od < e.radius + o.radius * 0.5f)
+                        {
+                            o.alive = false;
+                            e.eaten += 1.0f;
+                            e.hp += 1.0f;
+                            explode (o.pos, enemyColor (o.kind), enemyColor (EnemyKind::well), 20, 300.0f, 0.6f);
+                        }
+                    }
+
+                    // Overfed: it bursts and lets out what it ate.
+                    if (e.eaten >= 12.0f)
+                    {
+                        e.alive = false;
+                        explode (e.pos, enemyColor (EnemyKind::well), { 1, 1, 1 }, 260, 1100.0f, 1.8f);
+                        grid.push (e.pos, 1600.0f, 500.0f);
+                        band.post ({ Command::kill, band.pubChord.load(), 2, panOf (e.pos), -1, (int) EnemyKind::well });
+                        for (int i = 0; i < 8; ++i) spawnEnemy (EnemyKind::shard, e.pos + fromAngle (kTau * i / 8.0f, 30.0f), 0.0f);
+                        shakeAmount = std::max (shakeAmount, 12.0f);
+                    }
+                    break;
+                }
+            }
+
+            e.pos += e.vel * dt;
+
+            // Walls: bounce, and keep inside. The wander heading is only mirrored
+            // while it still points into the wall — mirroring it every frame
+            // against the wall left the pinwheels shivering there.
+            if (e.pos.x < kFieldL + e.radius) { e.pos.x = kFieldL + e.radius; e.vel.x = std::abs (e.vel.x); if (std::cos (e.wander) < 0.0f) e.wander = kPi - e.wander; }
+            if (e.pos.x > kFieldR - e.radius) { e.pos.x = kFieldR - e.radius; e.vel.x = -std::abs (e.vel.x); if (std::cos (e.wander) > 0.0f) e.wander = kPi - e.wander; }
+            if (e.pos.y < kFieldT + e.radius) { e.pos.y = kFieldT + e.radius; e.vel.y = std::abs (e.vel.y); if (std::sin (e.wander) < 0.0f) e.wander = -e.wander; }
+            if (e.pos.y > kFieldB - e.radius) { e.pos.y = kFieldB - e.radius; e.vel.y = -std::abs (e.vel.y); if (std::sin (e.wander) > 0.0f) e.wander = -e.wander; }
+        }
+
+        // Keep the crowd from stacking into one blob: a light shove apart.
+        for (size_t i = 0; i < enemies.size(); ++i)
+        {
+            auto& a = enemies[i];
+            if (! a.alive || a.spawn > 0.0f || a.kind == EnemyKind::well) continue;
+            for (size_t j = i + 1; j < enemies.size(); ++j)
+            {
+                auto& b = enemies[j];
+                if (! b.alive || b.spawn > 0.0f || b.kind == EnemyKind::well) continue;
+                const Vec2 d = a.pos - b.pos;
+                const float minD = (a.radius + b.radius) * 0.9f;
+                const float dd = d.lengthSq();
+                if (dd < minD * minD && dd > 0.01f)
+                {
+                    const float l = std::sqrt (dd);
+                    const Vec2 push = d / l * ((minD - l) * 0.5f);
+                    a.pos += push; b.pos -= push;
+                }
+            }
+        }
+    }
+
+    //==========================================================================
+
+    void World::updateBullets (float dt)
+    {
+        for (auto& b : bullets)
+        {
+            if (! b.alive) continue;
+
+            // Wells bend shots.
+            for (const auto& e : enemies)
+            {
+                if (! e.alive || e.kind != EnemyKind::well || e.spawn > 0.0f) continue;
+                const Vec2 d = e.pos - b.pos;
+                const float dist = d.length();
+                if (dist < 300.0f && dist > 1.0f) b.vel += d / dist * (2600.0f * (1.0f - dist / 300.0f) * dt);
+            }
+
+            b.pos += b.vel * dt;
+            b.life -= dt;
+
+            if (b.pos.x < kFieldL || b.pos.x > kFieldR || b.pos.y < kFieldT || b.pos.y > kFieldB || b.life <= 0.0f)
+            {
+                b.alive = false;
+                const Vec2 at = clampToField (b.pos, 1.0f);
+                for (int i = 0; i < 4; ++i)
+                {
+                    Particle p;
+                    p.pos = at;
+                    p.vel = rng.inDisc (380.0f) - b.vel.normalised() * 120.0f;
+                    p.color = chordColor (b.chord).withAlpha (0.8f);
+                    p.life = p.maxLife = rng.range (0.15f, 0.35f);
+                    p.width = 2.0f;
+                    particles.push_back (p);
+                }
+            }
+        }
+    }
+
+    void World::updateParticles (float dt)
+    {
+        const float step = dt * 60.0f;
+
+        // Wells drag light in.
+        Vec2 wellPos[4]; int wellCount = 0;
+        for (const auto& e : enemies)
+            if (e.alive && e.kind == EnemyKind::well && e.spawn <= 0.0f && wellCount < 4) wellPos[wellCount++] = e.pos;
+
+        for (auto& p : particles)
+        {
+            p.life -= dt;
+            p.vel *= std::pow (p.drag, step);
+
+            for (int w = 0; w < wellCount; ++w)
+            {
+                const Vec2 d = wellPos[w] - p.pos;
+                const float dist = d.length();
+                if (dist < 300.0f && dist > 4.0f)
+                    p.vel += (d / dist * 2200.0f + d.perp() / dist * 900.0f) * ((1.0f - dist / 300.0f) * dt);
+            }
+
+            p.pos += p.vel * dt;
+
+            // Up and down: gravity, a bounce off the floor that keeps 40%.
+            p.vz -= kSparkGravity * dt;
+            p.vz *= std::pow (p.drag, step * 0.5f);
+            p.z += p.vz * dt;
+            if (p.z < 0.0f) { p.z = -p.z * 0.4f; p.vz = std::abs (p.vz) * 0.4f; }
+
+            if (p.pos.x < kFieldL) { p.pos.x = kFieldL; p.vel.x = std::abs (p.vel.x) * 0.6f; }
+            if (p.pos.x > kFieldR) { p.pos.x = kFieldR; p.vel.x = -std::abs (p.vel.x) * 0.6f; }
+            if (p.pos.y < kFieldT) { p.pos.y = kFieldT; p.vel.y = std::abs (p.vel.y) * 0.6f; }
+            if (p.pos.y > kFieldB) { p.pos.y = kFieldB; p.vel.y = -std::abs (p.vel.y) * 0.6f; }
+        }
+
+        particles.erase (std::remove_if (particles.begin(), particles.end(), [] (const Particle& p) { return p.life <= 0.0f; }),
+                         particles.end());
+
+        // Past the cap the oldest go first; a frame with ten thousand sparks is
+        // a frame that drops.
+        if (particles.size() > 7000) particles.erase (particles.begin(), particles.begin() + (particles.size() - 7000));
+    }
+
+    void World::updatePickups (float dt)
+    {
+        for (auto& p : pickups)
+        {
+            p.life -= dt;
+            p.angle += dt * 2.0f;
+            p.vel *= std::exp (-dt * 0.8f);
+
+            if (ship.alive)
+            {
+                const Vec2 d = ship.pos - p.pos;
+                const float dist = d.length();
+                if (dist < 160.0f && dist > 1.0f) p.vel += d / dist * (1400.0f * dt);   // a little magnet
+                if (dist < 38.0f)
+                {
+                    p.alive = false;
+                    band.post ({ Command::powerUp });
+                    static const char* names[3] { "ARP 1/8", "ARP 1/16", "ARP 1/32" };
+                    const int rate = std::min (2, band.pubArpRate.load() + 1);
+                    popups.push_back ({ p.pos, names[rate], 1.4f, kPowerUpColor, 30.0f });
+                    explode (p.pos, kPowerUpColor, { 1, 1, 1 }, 60, 600.0f, 0.9f);
+                    rings.push_back ({ p.pos, 20.0f, 900.0f, 0.5f, kPowerUpColor });
+                }
+            }
+
+            p.pos = clampToField (p.pos + p.vel * dt, 20.0f);
+            if (p.life <= 0.0f) p.alive = false;
+        }
+    }
+
+    //==========================================================================
+
+    void World::collide()
+    {
+        // Bullets into enemies.
+        for (auto& b : bullets)
+        {
+            if (! b.alive) continue;
+            for (auto& e : enemies)
+            {
+                if (! e.alive || e.spawn > 0.0f) continue;
+                const float r = e.radius + 6.0f;
+                if ((e.pos - b.pos).lengthSq() > r * r) continue;
+
+                b.alive = false;
+
+                if (e.kind == EnemyKind::well)
+                {
+                    e.hp -= 1.0f;
+                    e.flash = 1.0f;
+                    e.vel += b.vel * 0.01f;
+                    grid.push (e.pos, 120.0f, 120.0f);
+                    if (e.hp <= 0.0f) kill (e, b.chord, true, true, b.note);
+                }
+                else
+                {
+                    kill (e, b.chord, true, true, b.note);
+                }
+                break;
+            }
+        }
+
+        // Enemies into the ship.
+        if (state == Phase::playing && ship.alive && ship.invulnerable <= 0.0f)
+        {
+            for (const auto& e : enemies)
+            {
+                if (! e.alive || e.spawn > 0.0f) continue;
+                const float r = e.radius * 0.8f + 12.0f;
+                if ((e.pos - ship.pos).lengthSq() < r * r) { shipDies(); break; }
+            }
+        }
+    }
+
+    void World::kill (Enemy& e, int chord, bool scored, bool sounded, int note)
+    {
+        if (! e.alive) return;
+        e.alive = false;
+
+        const Color ec = enemyColor (e.kind);
+        const Color cc = chordColor (chord);
+        const bool big = e.kind == EnemyKind::well;
+
+        explode (e.pos, ec, cc, big ? 220 : 70, big ? 1100.0f : 650.0f, big ? 1.8f : 1.1f);
+        grid.push (e.pos, big ? 1800.0f : 520.0f, big ? 460.0f : 150.0f);
+        if (big) { shakeAmount = std::max (shakeAmount, 10.0f); rings.push_back ({ e.pos, 30.0f, 1400.0f, 0.6f, ec }); }
+
+        if (sounded)
+            band.post ({ Command::kill, chord, chordSize (e.kind), panOf (e.pos), note, (int) e.kind });
+
+        if (scored)
+        {
+            ++killsSinceDeath;
+            multiplier = std::min (10, 1 + killsSinceDeath / 30);
+            addScore (e.value * multiplier, e.pos);
+            if (! slowActive) slowMeter = std::min (1.0f, slowMeter + kSlowPerKill);   // no refill while it runs
+
+            // Arpeggio power-ups drop now and then while there is room to speed up.
+            if (band.pubArpRate.load() < 2 && pickups.empty() && rng.chance (big ? 0.6f : 0.022f))
+                pickups.push_back ({ e.pos, rng.inDisc (80.0f), 9.0f, 0.0f, true });
+        }
+
+        if (e.kind == EnemyKind::splitter && scored)
+            for (int i = 0; i < 3; ++i)
+            {
+                spawnEnemy (EnemyKind::shard, e.pos + fromAngle (kTau * i / 3.0f + e.angle, 24.0f), 0.0f);
+                if (! incoming.empty()) incoming.back().vel = fromAngle (kTau * i / 3.0f + e.angle, 320.0f);
+            }
+    }
+
+    void World::explode (Vec2 pos, Color a, Color b, int count, float speed, float life)
+    {
+        for (int i = 0; i < count; ++i)
+        {
+            Particle p;
+            p.pos = pos;
+            const float s = speed * (0.15f + 0.85f * std::pow (rng.unit(), 0.6f));
+            p.vel = fromAngle (rng.range (0.0f, kTau), s);
+            p.color = mix (a, b, rng.unit());
+            p.color.a = rng.range (0.6f, 1.0f);
+            p.life = p.maxLife = life * rng.range (0.4f, 1.0f);
+            p.width = rng.range (1.8f, 3.4f);
+            p.drag = rng.range (0.92f, 0.965f);
+            p.z = 12.0f;
+            p.vz = s * rng.range (0.1f, 0.75f);
+            particles.push_back (p);
+        }
+    }
+
+    void World::addScore (int amount, Vec2 where)
+    {
+        points += amount;
+        if (amount >= 200) popups.push_back ({ where, std::to_string (amount), 0.8f, { 1, 1, 1 }, 18.0f });
+
+        if (points >= nextLifeAt) { ++lives; nextLifeAt += kLifeEvery; banner = "+1 LIFE"; bannerLife = 1.6f; bannerColor = { 0.4f, 1.0f, 0.5f }; }
+        if (points >= nextBombAt) { ++bombs; nextBombAt += kBombEvery; banner = "+1 BOMB"; bannerLife = 1.6f; bannerColor = kBombColor; }
+    }
+
+    void World::shipDies()
+    {
+        ship.alive = false;
+        band.firing = false;
+        setSlow (false);
+        band.post ({ Command::death });
+
+        explode (ship.pos, { 1, 1, 1 }, chordColor (band.pubChord.load()), 500, 1300.0f, 2.2f);
+        explode (ship.pos, { 1.0f, 0.8f, 0.3f }, { 1.0f, 0.2f, 0.1f }, 200, 700.0f, 1.6f);
+        grid.push (ship.pos, 2600.0f, 600.0f);
+        rings.push_back ({ ship.pos, 20.0f, 1600.0f, 0.8f, { 1, 1, 1 } });
+        shakeAmount = 22.0f;
+        flashAmount = 0.6f;
+
+        // Everything on the field goes with it, silently and for no score.
+        for (auto& e : enemies) if (e.alive) kill (e, 0, false, false);
+        pickups.clear();
+
+        multiplier = 1;
+        killsSinceDeath = 0;
+
+        if (--lives <= 0)
+        {
+            state = Phase::gameOver;
+            band.post ({ Command::stop });
+            banner = "GAME OVER"; bannerLife = 1.0e9f; bannerColor = { 1.0f, 0.25f, 0.25f };
+        }
+        else
+        {
+            state = Phase::dead;
+            deadTime = 0.0f;
+        }
+    }
+
+    void World::respawn()
+    {
+        if (state != Phase::dead) return;
+        state = Phase::playing;
+        ship.alive = true;
+        ship.pos = kCentre;
+        ship.vel = {};
+        ship.invulnerable = 2.0f;
+        rings.push_back ({ ship.pos, 300.0f, -500.0f, 0.55f, chordColor (band.pubChord.load()) });
+    }
+
+    void World::detonateBomb()
+    {
+        if (bombs <= 0 || ! ship.alive) return;
+        --bombs;
+        band.post ({ Command::bomb });
+
+        for (auto& e : enemies) if (e.alive) kill (e, band.pubChord.load(), false, false);
+        grid.push (ship.pos, 3200.0f, 1400.0f);
+        rings.push_back ({ ship.pos, 30.0f, 2200.0f, 0.9f, kBombColor });
+        rings.push_back ({ ship.pos, 10.0f, 1600.0f, 1.1f, { 1, 1, 1 } });
+        explode (ship.pos, kBombColor, { 1.0f, 0.6f, 0.5f }, 400, 1800.0f, 1.6f);
+        shakeAmount = 18.0f;
+        flashAmount = 0.8f;
+        ship.invulnerable = std::max (ship.invulnerable, 1.0f);
+    }
+
+    void World::threats (std::vector<Threat>& out) const
+    {
+        out.clear();
+        for (const auto& e : enemies)
+            if (e.alive) out.push_back ({ e.pos, e.vel, e.radius, e.spawn <= 0.0f });
+    }
+}
