@@ -55,9 +55,9 @@ namespace np::audio
 {
     struct Command
     {
-        enum Type : std::uint8_t { start, stop, pause, resume, kill, death, bomb, powerUp, blip, slow };
+        enum Type : std::uint8_t { start, stop, pause, resume, kill, death, bomb, powerUp, blip, slow, setLayer };
         Type  type = blip;
-        int   a = 0, b = 0;      // start: song, arp direction. kill: chord slot, size. blip: note. slow: 1 on, 0 off
+        int   a = 0, b = 0;      // start: song, arp direction. kill: chord slot, size. blip: note. slow: 1 on, 0 off. setLayer: layer (tools only)
         float x = 0.5f;          // kill: pan 0..1
         int   note = -1;         // kill: the note of the bullet, if it had one
         int   kind = -1;         // kill: np::EnemyKind, for songs with a sound per kind
@@ -65,11 +65,11 @@ namespace np::audio
 
     struct Event
     {
-        enum Type : std::uint8_t { shot, chord, layerUp, layerDown, bar, dropEnd, songEnd };
+        enum Type : std::uint8_t { shot, chord, layerUp, layerDown, bar, dropEnd, songEnd, section };
         Type type = bar;
         int  a = 0, b = 0, c = 0, d = 0;
         // shot:  a note, b chord slot, c place in the arp cycle 0..100, d accent
-        // chord: a slot.   layerUp/Down: a layer.   bar: a bar index
+        // chord: a slot.   layerUp/Down: a layer.   bar: a bar index.   section: a section
     };
 
     class Conductor
@@ -83,6 +83,13 @@ namespace np::audio
         // Game thread
 
         std::atomic<int>   requestedChord { 0 };
+
+        /** Which section the game wants (the zone the ship is in), latched on
+            the next bar. With `endless` the song never ends: the 3D game's
+            level ends at its gate instead (2026-10-19). */
+        std::atomic<int>   requestedSection { 0 };
+        std::atomic<bool>  endless { false };
+        SectionStyle sectionStyle = SectionStyle::newChords;   // set before start; the previews try both
         std::atomic<bool>  firing { false };
         std::atomic<float> aimPan { 0.5f };
 
@@ -93,7 +100,7 @@ namespace np::audio
         std::atomic<std::int64_t> pubSample { 0 };
         std::atomic<double>       pubSamplesPerTick { 2700.0 };
         std::atomic<int>  pubLayer { 0 }, pubChord { 0 }, pubArpRate { 0 }, pubRateBars { 0 };
-        std::atomic<int>  pubBarsToLayer { kBarsPerLayer }, pubKicks { 0 }, pubSong { 0 }, pubArpDir { 0 };
+        std::atomic<int>  pubBarsToLayer { kBarsPerLayer }, pubKicks { 0 }, pubSong { 0 }, pubArpDir { 0 }, pubSection { 0 };
         std::atomic<bool> pubRunning { false }, pubDropped { false }, pubEnded { false };
         std::atomic<float> pubPeak { 0.0f };
 
@@ -214,6 +221,8 @@ namespace np::audio
             const auto& padSound = ! current->sharpPad ? (current->padRhythm.hold ? padSoftPatch() : padSoftRhythmPatch())
                                  : (current->padRhythm.gate <= 0.5f ? padGatePatch() : padPatch());
             for (auto& v : pad) v.setPatch (padSound);
+            section = 0;
+            wheel = current->chords;
 
             delay.setTiming (current->bpm, current->delayDivision);
             delay.setAmount (current->delaySend, current->delayFeedback);
@@ -258,6 +267,9 @@ namespace np::audio
             layer = 0;
             barsSurvived = 0;
             chord = std::clamp (requestedChord.load(), 0, 3);
+            section = std::clamp (requestedSection.load(), 0, kSections - 1);
+            wheel = sectionWheel (*current, section, sectionStyle);
+            sectionFillBar = -1;
             arpRate = 0;
             rateBars = 0;
             arpStep = 0;
@@ -395,6 +407,11 @@ namespace np::audio
                     case Command::blip:
                         playArpVoice (c.a, 0.55f, c.x);
                         break;
+
+                    case Command::setLayer:
+                        layer = std::clamp (c.a, 0, maxLayer (*current));
+                        barsSurvived = 0;
+                        break;
                 }
             }
         }
@@ -451,6 +468,10 @@ namespace np::audio
                 flushKills();
             }
 
+            // A section change asked for by beat four gets a snare roll into it.
+            if (t == 24 && ! dropped && requestedSection.load (std::memory_order_relaxed) != section)
+                sectionFillBar = bar;
+
             if (hatFillBar == bar && ! dropped && t >= 24 && t % 2 == 1)
                 kit.trigger (PumpKit::closedHat, 0.45f + 0.03f * (float) (t - 24));
 
@@ -465,7 +486,7 @@ namespace np::audio
             bar = newBar;
             postEvent ({ Event::bar, bar });
 
-            if (bar >= current->lengthBars)
+            if (bar >= current->lengthBars && ! endless.load (std::memory_order_relaxed))
             {
                 // The end of the song: one last tonic, everything else lets go.
                 running = false;
@@ -519,6 +540,18 @@ namespace np::audio
                     riser.start (tickSample ((std::int64_t) (bar + 2) * kTicksPerBar) - tickSample ((std::int64_t) bar * kTicksPerBar));
             }
 
+            // A new section: its chords from this downbeat, with a crash.
+            {
+                const int want = std::clamp (requestedSection.load (std::memory_order_relaxed), 0, kSections - 1);
+                if (want != section)
+                {
+                    section = want;
+                    wheel = sectionWheel (*current, section, sectionStyle);
+                    if (! dropped) kit.trigger (PumpKit::crash, 0.85f);
+                    postEvent ({ Event::section, section });
+                }
+            }
+
             if (rateBars > 0 && --rateBars == 0)
             {
                 --arpRate;
@@ -550,6 +583,9 @@ namespace np::audio
             if (hatFillBar == bar && step >= 8)
                 kit.trigger (PumpKit::closedHat, 0.35f + 0.06f * (float) (step - 8));
 
+            if (sectionFillBar == bar && fillBar != bar && step >= 12)
+                kit.trigger (PumpKit::snare, 0.7f + 0.08f * (float) (step - 12));
+
             if (fillBar == bar && step >= 8 && (step >= 12 || step % 2 == 0))
             {
                 // Loud enough to be heard over kick and hats: +0.6 dB on the drum
@@ -560,14 +596,15 @@ namespace np::audio
         }
 
         //======================================================================
-        int chordThird (int slot) const noexcept { return current->chords[(size_t) slot].minor ? 3 : 4; }
+        int chordThird (int slot) const noexcept { return wheel[(size_t) (slot & 3)].minor ? 3 : 4; }
+        int rootPc (int slot) const noexcept { return chordRootPc (*current, wheel, slot); }
 
         void bassStep (int step) noexcept
         {
             const auto& s = current->bassPattern[(size_t) step];
             if (! s.on) return;
 
-            const int root = placeAbove (chordRootPc (*current, chord), current->bassLow);
+            const int root = placeAbove (rootPc (chord), current->bassLow);
             const int note = root + s.interval;
             const int gate = (int) (s.gate * samplesPerTick * 2.0);
 
@@ -654,7 +691,7 @@ namespace np::audio
 
         int arpNote (int slot, int degree) const noexcept
         {
-            const int root = placeAbove (chordRootPc (*current, slot), current->arpLow);
+            const int root = placeAbove (rootPc (slot), current->arpLow);
             const int third = chordThird (slot);
             const int tones[7] { 0, third, 7, 12, 12 + third, 19, 24 };
             return root + tones[std::clamp (degree, 0, 6)];
@@ -849,7 +886,7 @@ namespace np::audio
         {
             // Lifted from 57/50/43 on 2026-10-07: more of the chord in the midrange.
             static constexpr int lows[3] { 60, 55, 48 };
-            const int root = placeAbove (chordRootPc (*current, slot), lows[std::clamp (size, 0, 2)]);
+            const int root = placeAbove (rootPc (slot), lows[std::clamp (size, 0, 2)]);
             const int third = chordThird (slot);
 
             hits.trigger (root,         velocity, size, pan);
@@ -871,7 +908,7 @@ namespace np::audio
             across the drop. */
         void playDeathChord() noexcept
         {
-            const int root = placeAbove (chordRootPc (*current, chord), 36);
+            const int root = placeAbove (rootPc (chord), 36);
             const int third = chordThird (chord);
             const int notes[7] { root, root + 7, root + 12, root + 12 + third, root + 19, root + 24, root + 24 + third };
             for (int n : notes) hits.trigger (n, 1.0f, 2, 0.5f, 2.6f);
@@ -902,7 +939,7 @@ namespace np::audio
             const int third = chordThird (chord);
             // Songs 1-2 an octave down from 55 since 2026-10-07 ("sänk alla pads en
             // oktav"); song 3 went down too and came back up to 52 the same day.
-            const int root = placeAbove (chordRootPc (*current, chord),
+            const int root = placeAbove (rootPc (chord),
                                          (current->sharpPad ? 43 : 52) + 12 * current->padOctave);
             const int open[4]  { root, root + 7, root + 12 + third, root + 19 };
             const int close[4] { root, root + third, root + 7, root + 12 };
@@ -1197,6 +1234,7 @@ namespace np::audio
             pubKicks.store (kicks);
             pubSong.store (songIndex);
             pubArpDir.store (arpDirection);
+            pubSection.store (section);
             pubRunning.store (running && ! paused);
             pubDropped.store (dropped);
             pubEnded.store (ended);
@@ -1285,7 +1323,9 @@ namespace np::audio
         float slowTarget = 0.0f;   // 0 open .. 1 shut, from the game
         float slowOctave = kSlowOpen;
         Svf slowL, slowR;
-        int fillBar = -1, hatFillBar = -1;
+        int fillBar = -1, hatFillBar = -1, sectionFillBar = -1;
+        int section = 0;
+        Wheel wheel {};
         std::int64_t bassIntroStart = -1, bassIntroEnd = -1;
         float bassOffset = 0.0f;
         std::array<int, 16> arpCycle {};

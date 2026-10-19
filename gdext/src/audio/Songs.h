@@ -246,6 +246,61 @@ namespace np::audio
                        s.chords[(size_t) (slot & 3)].minor ? "m" : "");
     }
 
+    //==========================================================================
+    // Sections (2026-10-19)
+
+    /** The 3D game's level has a zone per section; flying into one changes the
+        song's section on the next bar, and with it the four chords on the
+        wheel. The verse is the song's own wheel. */
+    enum class Section { verse, chorus, bridge };
+    inline constexpr int kSections = 3;
+
+    inline const char* sectionName (int s) noexcept
+    {
+        static const char* names[kSections] { "VERSE", "CHORUS", "BRIDGE" };
+        return names[std::clamp (s, 0, kSections - 1)];
+    }
+
+    using Wheel = std::array<ChordSlot, 4>;
+
+    /** Two ways to make the chorus and bridge, to be chosen by ear:
+
+        - keyLift: the verse's wheel moved up — the chorus a whole tone, the
+          bridge to the key a fourth up. Every direction keeps its function,
+          so the stick means the same thing everywhere; the key change is the
+          lift.
+        - newChords: the same key, new chords. The chorus walks the circle of
+          fifths clockwise (iv VII III VI: Dm G C F in A minor); the bridge
+          brings in the major V for tension (VI iv V i: F Dm E Am). */
+    enum class SectionStyle { keyLift, newChords };
+
+    inline Wheel sectionWheel (const Song& s, int section, SectionStyle style) noexcept
+    {
+        if (section <= 0) return s.chords;
+
+        if (style == SectionStyle::keyLift)
+        {
+            Wheel w = s.chords;
+            const int shift = section == 1 ? 2 : 5;
+            for (auto& c : w) c.offset = (c.offset + shift) % 12;
+            return w;
+        }
+
+        if (section == 1) return {{ { 5, true }, { 10, false }, { 3, false }, { 8, false } }};
+        return {{ { 8, false }, { 5, true }, { 7, false }, { 0, true } }};
+    }
+
+    inline int chordRootPc (const Song& s, const Wheel& w, int slot) noexcept
+    {
+        return (s.keyRoot + w[(size_t) (slot & 3)].offset) % 12;
+    }
+
+    inline void chordName (const Song& s, const Wheel& w, int slot, char* out, int size) noexcept
+    {
+        static const char* names[12] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        std::snprintf (out, (size_t) size, "%s%s", names[chordRootPc (s, w, slot)], w[(size_t) (slot & 3)].minor ? "m" : "");
+    }
+
     /** The lowest MIDI note at or above `low` with this pitch class. */
     inline int placeAbove (int pitchClass, int low) noexcept
     {
