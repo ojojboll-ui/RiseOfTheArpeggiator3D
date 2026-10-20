@@ -11,6 +11,7 @@ var mode := Mode.MENU
 var data := {}             # ArpGame.hud() for the frame, with towers and gate
 var rooms := []            # ArpGame.level_rooms(), for the map
 var camera: Camera3D
+var view_size := Vector2.ZERO   # the 3D view's size in pixels
 var paused := false
 var attract := false
 var has_pad := false
@@ -108,22 +109,21 @@ func _draw_game() -> void:
 		draw_rect(Rect2(x0 + 5, y0 + 5, (x1 - x0 - 10) * meter, y1 - y0 - 10), Color(SLOW_COLOR, a))
 	text("SLOW MOTION", Vector2(x0, 10), 16, Color(SLOW_COLOR, max(a, 0.55)))
 
-	# Song, difficulty, and the three towers in their colours: struck out
-	# when down, the gate when they all are.
+	# Song, difficulty, and the six doors to the exit, bottom to top: each
+	# door's three bars go as the towers of its wave fall.
 	text("%s  ·  %s" % [data.song, data.difficulty], Vector2(W * 0.5, 12), 30, accent, 0.5)
-	for i in data.towers.size():
-		var tw: Dictionary = data.towers[i]
-		var c: Color = tw.color
-		var x: float = W * 0.5 + (i - 1) * 54.0
-		var pts := PackedVector2Array([Vector2(x - 11, 74), Vector2(x - 6, 52), Vector2(x + 6, 52), Vector2(x + 11, 74)])
-		if tw.alive:
-			glow_poly(pts, c, 2.5)
-			draw_rect(Rect2(x - 9, 78, 18.0 * float(tw.health), 4), c)
-		else:
-			glow_poly(pts, Color(c, 0.3), 1.5)
-			draw_line(Vector2(x - 14, 76), Vector2(x + 14, 50), Color(c, 0.7), 2.5, true)
+	for i in data.doors.size():
+		var door: Dictionary = data.doors[i]
+		var c: Color = door.color
+		var x: float = W * 0.5 + (i - 2.5) * 46.0
+		var frame := Color(c, 0.3) if door.open else c
+		draw_line(Vector2(x - 15, 50), Vector2(x - 15, 82), frame, 3.0, true)
+		draw_line(Vector2(x + 15, 50), Vector2(x + 15, 82), frame, 3.0, true)
+		for k in 3:
+			if door.bars[k]:
+				glow_line(Vector2(x - 12, 76 - 11.0 * k), Vector2(x + 12, 76 - 11.0 * k), c, 3.0)
 	if data.gate_open:
-		text("GATE OPEN", Vector2(W * 0.5, 88), 20, Color(accent, 0.6 + 0.4 * sin(clock * 6.0)), 0.5, false)
+		text("EXIT OPEN", Vector2(W * 0.5, 90), 20, Color(accent, 0.6 + 0.4 * sin(clock * 6.0)), 0.5, false)
 
 	_draw_map(Vector2(W - 270.0, 80.0), 230.0)
 
@@ -187,10 +187,15 @@ func _draw_map(at: Vector2, width: float) -> void:
 		var p: Vector3 = tw.pos
 		var c: Color = tw.color
 		var q := at + Vector2(p.x, p.z) * s
-		if tw.alive:
-			draw_circle(q, 5.0, c)
-		else:
-			draw_arc(q, 5.0, 0, TAU, 12, Color(c, 0.5), 1.5, true)
+		if tw.alive and tw.active:
+			draw_circle(q, 4.0, c)
+		elif not tw.alive:
+			draw_arc(q, 4.0, 0, TAU, 12, Color(c, 0.4), 1.2, true)
+	for door in data.doors:
+		if door.open:
+			continue
+		var r: Rect2 = door.rect
+		draw_line(at + Vector2(r.position.x, r.get_center().y) * s, at + Vector2(r.end.x, r.get_center().y) * s, door.color, 2.0)
 	var g: Dictionary = data.gate
 	var gp: Vector3 = g.pos
 	var gq := at + Vector2(gp.x, gp.z) * s
@@ -201,9 +206,8 @@ func _draw_map(at: Vector2, width: float) -> void:
 
 
 func _canvas_scale() -> Vector2:
-	# unproject_position gives viewport pixels; the HUD draws on the stretched canvas.
-	var vp := get_viewport().get_visible_rect().size
-	return size / vp if vp.x > 0.0 else Vector2.ONE
+	# unproject_position gives the 3D view's pixels; the HUD draws on the stretched canvas.
+	return size / view_size if view_size.x > 0.0 else Vector2.ONE
 
 
 func _draw_wheel(centre: Vector2) -> void:
@@ -264,7 +268,7 @@ func _draw_menu() -> void:
 	text("RISE OF THE", Vector2(W * 0.5, 60), 54, accent, 0.5)
 	text("ARPEGGIATOR", Vector2(W * 0.5, 120), 130, accent, 0.5)
 	text("ARPEGGIATOR", Vector2(W * 0.5, 120), 130, Color(1, 1, 1, 0.25 + 0.2 * pulse), 0.5, false)
-	text("FOUR CHORDS  ·  ONE ARPEGGIO  ·  THREE TOWERS  ·  ONE GATE", Vector2(W * 0.5, 300), 26, Color(1, 1, 1, 0.75), 0.5)
+	text("FOUR CHORDS  ·  ONE ARPEGGIO  ·  SIX TOWERS  ·  SIX DOORS", Vector2(W * 0.5, 300), 26, Color(1, 1, 1, 0.75), 0.5)
 
 	for i in 3:
 		var s: Dictionary = songs[i]

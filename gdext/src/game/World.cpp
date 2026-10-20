@@ -50,7 +50,7 @@ namespace np
         {
             case EnemyKind::wanderer: return { 0.72f, 0.38f, 1.0f };
             case EnemyKind::seeker:   return { 0.25f, 0.82f, 1.0f };
-            case EnemyKind::dodger:   return { 0.30f, 1.0f, 0.42f };
+            case EnemyKind::dodger:   return { 1.0f, 0.82f, 0.20f };   // gold since 2026-10-20: green is the power-up's
             case EnemyKind::splitter: return { 1.0f, 0.30f, 0.80f };
             case EnemyKind::shard:    return { 1.0f, 0.55f, 0.85f };
             case EnemyKind::well:     return { 1.0f, 0.36f, 0.14f };
@@ -62,7 +62,9 @@ namespace np
     {
         constexpr float kSparkGravity = 1800.0f;
         constexpr float kSlopePull = 520.0f;      // how hard hills roll enemies down, units/s² per unit of slope
-        constexpr float kTowerHp = 160.0f;        // hits: about fifteen seconds of the arpeggio at 1/8
+        constexpr float kTowerHp = 160.0f;        // hits: about fifteen seconds of the arpeggio at 1/8; the second wave's
+        constexpr float kFirstWaveHp = 80.0f;     // half as many for the first three (2026-10-20)
+        constexpr float kRiseSeconds = 1.5f;
         constexpr float kBombRadius = 1700.0f;    // about a screen: the level is bigger than one now
 
         // How big a chord each kind lets out: 0 bright and short, 2 dark and long.
@@ -86,6 +88,7 @@ namespace np
         grid.build (0.0f, 0.0f, lvl.width(), lvl.height(), 40.0f);
         grid.holdWhere ([this] (Vec2 p) { return lvl.solid (p); });
         ship.pos = lvl.start();
+        placeTowers();   // the menu shows the first level as it stands at the start
     }
 
     void World::start (int levelIn, int difficultyIn, const Carry* carryIn)
@@ -104,16 +107,7 @@ namespace np
         ship.pos = lvl.start();
         ship.invulnerable = 1.5f;
 
-        for (int z = 0; z < 3; ++z)
-        {
-            auto& t = towers[(size_t) z];
-            t = {};
-            t.pos = lvl.tower (z);
-            t.zone = z;
-            t.hp = t.maxHp = kTowerHp;
-        }
-        gate = {};
-        gate.pos = lvl.gate();
+        placeTowers();
         shipZone = lastWaveZone = 0;
 
         enemies.clear(); incoming.clear(); bullets.clear(); particles.clear();
@@ -141,6 +135,32 @@ namespace np
         band.post ({ Command::start, level, (int) (rng.next() % 4u) });
     }
 
+    void World::placeTowers()
+    {
+        // One tower per zone and wave: the first three stand from the start,
+        // the second three wait under the floor at other spots.
+        for (int wave = 0; wave < 2; ++wave)
+            for (int z = 0; z < 3; ++z)
+            {
+                auto& t = towers[(size_t) (wave * 3 + z)];
+                t = {};
+                t.pos = lvl.towerSpot (z, wave * 3);
+                t.zone = z;
+                t.wave = wave;
+                t.active = wave == 0;
+                t.rise = t.active ? 1.0f : 0.0f;
+                t.hp = t.maxHp = wave == 0 ? kFirstWaveHp : kTowerHp;
+            }
+        for (int d = 0; d < Level::kDoors; ++d)
+        {
+            doors[(size_t) d] = {};
+            doors[(size_t) d].zone = d % 3;
+            doors[(size_t) d].wave = d / 3;
+        }
+        gate = {};
+        gate.pos = lvl.gate();
+    }
+
     void World::say (const std::string& text, float life, Color color)
     {
         banner = text;
@@ -152,6 +172,13 @@ namespace np
     {
         int n = 0;
         for (const auto& t : towers) if (t.alive) ++n;
+        return n;
+    }
+
+    int World::doorsLeft() const
+    {
+        int n = 0;
+        for (const auto& d : doors) if (! d.open) ++n;
         return n;
     }
 
@@ -171,10 +198,14 @@ namespace np
                 if (state == Phase::playing)
                 {
                     spawnWave (e.a, false);
-                    // A tower sends out enemies every other bar while the ship is in its room.
+                    // Every other bar one of the towers in the ship's room sends out enemies.
                     if (e.a % 2 == 0 && ship.alive)
+                    {
+                        Tower* pick[kTowers]; int n = 0;
                         for (auto& t : towers)
-                            if (t.alive && t.zone == shipZone) towerBurst (t);
+                            if (t.shootable() && t.zone == shipZone) pick[n++] = &t;
+                        if (n > 0) towerBurst (*pick[rng.below (n)]);
+                    }
                 }
                 break;
 
@@ -388,7 +419,7 @@ namespace np
         Vec2 q = lvl.resolve (p, radius, &n);
         for (const auto& t : towers)
         {
-            if (! t.alive) continue;
+            if (! t.solidNow()) continue;
             const Vec2 d = q - t.pos;
             const float dist = d.length(), minD = t.radius + radius;
             if (dist < minD && dist > 1.0e-3f) { q = t.pos + d / dist * minD; n = d / dist; }
@@ -817,6 +848,12 @@ namespace np
         {
             t.flash = std::max (0.0f, t.flash - dt * 5.0f);
             if (! t.alive) t.fall = std::min (1.0f, t.fall + dt * 0.8f);
+            if (t.active && t.rise < 1.0f)
+            {
+                t.rise = std::min (1.0f, t.rise + dt / kRiseSeconds);
+                if (rng.chance (dt * 30.0f))
+                    explode (t.pos + rng.inDisc (t.radius), zoneColor (level, t.zone), { 1, 1, 1 }, 4, 300.0f, 0.6f, 1.4f);
+            }
         }
     }
 
@@ -839,22 +876,55 @@ namespace np
         for (auto& e : enemies)
             if (e.alive && (e.pos - t.pos).length() < 650.0f) kill (e, chord, true, false);
 
-        addScore (10000, t.pos);
+        addScore (t.wave == 0 ? 5000 : 10000, t.pos);
         band.post ({ Command::tower, chord, 0, panOf (t.pos) });
 
-        const int left = towersLeft();
-        if (left > 0) say (left == 1 ? "TOWER DOWN  ·  1 LEFT" : "TOWER DOWN  ·  2 LEFT", 2.2f, c);
+        // Its door, of its zone and wave, goes with it.
+        auto& door = doors[(size_t) (t.wave * 3 + t.zone)];
+        door.bars = { false, false, false };
+        if (! door.open)
+        {
+            door.open = true;
+            const int d = t.wave * 3 + t.zone;
+            lvl.openDoor (d);
+            grid.holdWhere ([this] (Vec2 p) { return lvl.solid (p); });
+            const Vec2 at = lvl.doorRect (d).centre();
+            rings.push_back ({ at, 40.0f, 1200.0f, 0.8f, c });
+            explode (at, c, { 1, 1, 1 }, 160, 900.0f, 1.4f, 1.2f);
+            const int left = doorsLeft();
+            if (left > 0)
+                say (left == 1 ? "A DOOR OPENS  ·  1 LEFT" : "A DOOR OPENS  ·  " + std::to_string (left) + " LEFT", 2.2f, c);
+        }
+
+        // The first three down: the second three rise, one in every zone.
+        if (t.wave == 0)
+        {
+            bool waveDown = true;
+            for (const auto& o : towers) if (o.wave == 0 && o.alive) waveDown = false;
+            if (waveDown)
+            {
+                for (auto& o : towers)
+                    if (o.wave == 1 && ! o.active)
+                    {
+                        o.active = true;
+                        o.rise = 0.0f;
+                        rings.push_back ({ o.pos, o.radius, 900.0f, 0.7f, zoneColor (level, o.zone) });
+                        grid.push (o.pos, 1200.0f, 400.0f);
+                    }
+                say ("THREE MORE TOWERS", 2.4f, levelAccent (level));
+            }
+        }
     }
 
     void World::updateGate (float dt)
     {
         if (! gate.open)
         {
-            if (state == Phase::playing && towersLeft() == 0)
+            if (state == Phase::playing && doorsLeft() == 0)
             {
                 gate.open = true;
                 gate.openTime = 0.0f;
-                say ("THE GATE IS OPEN", 3.0f, levelAccent (level));
+                say ("THE EXIT IS OPEN", 3.0f, levelAccent (level));
                 rings.push_back ({ gate.pos, 20.0f, 900.0f, 1.0f, levelAccent (level) });
                 band.post ({ Command::tower, band.pubChord.load(), 1, panOf (gate.pos) });
             }
@@ -1009,11 +1079,12 @@ namespace np
             // gone is heard as a chord.
             for (auto& t : towers)
             {
-                if (! t.alive) continue;
+                if (! t.solidNow()) continue;
                 const float r = t.radius + 6.0f;
                 if ((t.pos - b.pos).lengthSq() > r * r) continue;
 
                 b.alive = false;
+                if (! t.shootable()) break;   // still rising: the shot just stops
                 const int quarterBefore = (int) std::ceil (t.hp / t.maxHp * 4.0f);
                 t.hp -= 1.0f;
                 t.flash = 1.0f;

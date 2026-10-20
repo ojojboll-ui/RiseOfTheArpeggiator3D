@@ -21,6 +21,11 @@
     20-unit cells: open floor, the void outside the rooms, or a wall. The
     hills are a coarser grid of heights cut into triangles, so they come out
     faceted, lowpoly, and the game and the floor shader agree on every height.
+
+    The way out is at the very top (2026-10-20): a corridor north of the
+    chorus, shut by six doors one behind the other, two in each zone's
+    colour. Each zone has six places for towers, three for its first wave
+    and three for its second.
 */
 namespace np
 {
@@ -47,7 +52,9 @@ namespace np
         static constexpr float kWallHeight = 80.0f;    // interior walls, for drawing
         static constexpr float kRimHeight = 50.0f;     // the rooms' edges
 
-        enum Cell : std::uint8_t { open = 0, voidCell = 1, wall = 2 };
+        enum Cell : std::uint8_t { open = 0, voidCell = 1, wall = 2, door = 3 };
+        static constexpr int kDoors = 6;
+        static constexpr int kTowerSpots = 6;          // per zone: three for each wave
 
         struct Room { Rect r; int zone; bool hills, walls; };
         struct Segment { Vec2 a, b, outward; };        // outward: into the void
@@ -62,7 +69,17 @@ namespace np
         const std::vector<Segment>& rim() const { return rimList; }
         Vec2 start() const { return startPos; }
         Vec2 gate() const { return gatePos; }
-        Vec2 tower (int zone) const { return towerPos[(size_t) zone]; }
+        /** Where a zone's towers stand: spots 0-2 the first wave, 3-5 the second. */
+        Vec2 towerSpot (int zone, int spot) const { return towerSpots[(size_t) zone][(size_t) spot]; }
+
+        /** The exit corridor and its doors, bottom (nearest the chorus) to top.
+            Door d is in zone d % 3's colour. */
+        const Rect& exitCorridor() const { return exitRect; }
+        const Rect& doorRect (int d) const { return doorList[(size_t) d]; }
+        bool doorOpen (int d) const { return doorIsOpen[(size_t) d]; }
+        void openDoor (int d);
+        /** Counts every change to what is solid, so way-finding knows to look again. */
+        int revision() const { return rev; }
 
         /** The zone a point is in, or -1 in a passage or outside. */
         int zoneAt (Vec2 p) const
@@ -80,6 +97,9 @@ namespace np
             return cells[(size_t) (r * cols + c)];
         }
         bool solid (Vec2 p) const { return cellAt (p) != open; }
+
+        /** The nearest point to `want` with nothing solid within `clearance`. */
+        Vec2 placeClear (Vec2 want, float clearance) const;
 
         /** Pushes a circle out of everything solid; `normal` gets the direction
             it was pushed, zero if it was not. */
@@ -101,7 +121,7 @@ namespace np
 
         // Way-finding -----------------------------------------------------------------
         /** Distances to a target over open floor, by 40-unit cells. */
-        struct Flow { std::vector<float> dist; int target = -1; };
+        struct Flow { std::vector<float> dist; int target = -1, revision = -1; };
         void updateFlow (Flow& f, Vec2 target) const;
         /** Which way to go from `from` along a flow field; zero if lost. */
         Vec2 flowDirection (const Flow& f, Vec2 from) const;
@@ -124,8 +144,12 @@ namespace np
         std::array<Room, 3> roomList {};
         std::vector<Rect> passageList, wallList;
         std::vector<Segment> rimList;
-        std::array<Vec2, 3> towerPos {};
+        std::array<std::array<Vec2, kTowerSpots>, 3> towerSpots {};
         Vec2 startPos, gatePos;
+        Rect exitRect;
+        std::array<Rect, kDoors> doorList {};
+        std::array<bool, kDoors> doorIsOpen {};
+        int rev = 0;
 
         int hcols = 0, hrows = 0;
         std::vector<float> hills;

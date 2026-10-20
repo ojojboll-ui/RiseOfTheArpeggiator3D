@@ -14,11 +14,16 @@ GDExtension; Godot draws the world.
 **A level** is three rooms joined by narrower passages, each a section of the
 song with its own four chords: the **verse** (hills and valleys), the
 **chorus** (walls) and the **bridge** (both). Flying into a room changes the
-section on the next bar. Each room has a tower in its colour; shoot all three
-down and the gate opens where you started. Fly into it for the next song —
-PULSE, then ACID, then STARFALL — with your score, lives and bombs.
+section on the next bar. Each room has a tower in its colour; when all three
+are down, three stronger ones rise, one in each room again. The way out is a
+corridor at the top shut by six doors, two in each room's colour, and every
+tower that falls takes away one of them. Through the last door is the exit:
+fly into it for the next song — PULSE, then ACID, then STARFALL — with your
+score, lives and bombs.
 
-Still to come: trails in slow motion, and a pass on looks and menus.
+Slow motion leaves trails behind everything that shines.
+
+Still to come: a pass on looks and menus.
 
 ## Controls
 

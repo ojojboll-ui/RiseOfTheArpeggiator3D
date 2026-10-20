@@ -277,6 +277,7 @@ Dictionary ArpGame::hud() const
     d["section_name"] = String (np::audio::sectionName (section));
     d["zone"] = w->zone();
     d["towers_left"] = w->towersLeft();
+    d["doors_left"] = w->doorsLeft();
     d["gate_open"] = w->gateState().open;
     d["finished"] = w->finished();
     d["last_level"] = level >= 2;
@@ -417,7 +418,8 @@ PackedFloat32Array ArpGame::pickup_buffer (int capacity) const
     {
         if (! p.alive) continue;
         const float blink = p.life < 2.0f ? (std::sin (p.life * 25.0f) > 0.0f ? 1.0f : 0.25f) : 1.0f;
-        const float r = 18.0f * kScale * kLook;
+        // Bigger than the 2D game's (2026-10-20): it was hard to tell from an enemy.
+        const float r = (30.0f + 4.0f * kick) * kScale * kLook;
         const Basis b = (yaw (p.angle) * Basis (Vector3 (1, 0, 0), p.angle * 0.7f)).scaled (Vector3 (r, r, r));
         const np::Color c = np::kPowerUpColor;
         out.put (b, place (p.pos, kPickupHover), Color (c.r, c.g, c.b, blink), Color (blink, kick, 0, 0));
@@ -573,10 +575,35 @@ Array ArpGame::tower_states() const
         d["zone"] = t.zone;
         d["health"] = std::clamp (t.hp / t.maxHp, 0.0f, 1.0f);
         d["alive"] = t.alive;
+        d["active"] = t.active;
+        d["rise"] = t.rise;
+        d["wave"] = t.wave;
         d["flash"] = t.flash;
         d["fall"] = t.fall;
         d["radius"] = t.radius * kScale;
         d["color"] = toColor (np::zoneColor (w->levelIndex(), t.zone));
+        out.push_back (d);
+    }
+    return out;
+}
+
+Array ArpGame::door_states() const
+{
+    const np::World* w = view();
+    Array out;
+    for (int i = 0; i < np::Level::kDoors; ++i)
+    {
+        const auto& door = w->doorList()[(size_t) i];
+        const auto& r = w->ground().doorRect (i);
+        Dictionary d;
+        d["rect"] = Rect2 (r.x0 * kScale, r.y0 * kScale, r.width() * kScale, r.height() * kScale);
+        d["ground"] = place (r.centre(), 0.0f).y;
+        d["zone"] = door.zone;
+        Array bars;
+        for (bool b : door.bars) bars.push_back (b);
+        d["bars"] = bars;
+        d["open"] = door.open;
+        d["color"] = toColor (np::zoneColor (w->levelIndex(), door.zone));
         out.push_back (d);
     }
     return out;
@@ -653,6 +680,7 @@ void ArpGame::_bind_methods()
     ClassDB::bind_method (D_METHOD ("level_rooms"), &ArpGame::level_rooms);
     ClassDB::bind_method (D_METHOD ("tower_states"), &ArpGame::tower_states);
     ClassDB::bind_method (D_METHOD ("gate_state"), &ArpGame::gate_state);
+    ClassDB::bind_method (D_METHOD ("door_states"), &ArpGame::door_states);
     ClassDB::bind_method (D_METHOD ("start_position"), &ArpGame::start_position);
     ClassDB::bind_method (D_METHOD ("stop"), &ArpGame::stop);
     ClassDB::bind_method (D_METHOD ("pause_band"), &ArpGame::pause_band);

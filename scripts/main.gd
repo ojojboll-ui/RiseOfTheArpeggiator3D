@@ -17,6 +17,7 @@ extends Node3D
 ##   --reckless        the autopilot flies unarmed, to test deaths
 ##   --slowtest        the autopilot holds slow motion 3 s in every 12
 ##   --counts          print counts and state once a second
+##   --lookexit        the camera looks at the exit corridor instead
 
 const ENEMY_CAP := 256
 const BULLET_CAP := 768
@@ -40,6 +41,9 @@ var pad := Pad.new()
 var hud: Control
 var postfx: ColorRect
 var postfx_mat: ShaderMaterial
+var view3d: SubViewport        # the 3D world renders here...
+var trail_vp: SubViewport      # ...then through the trail feedback, then to the screen
+var trail_mat: ShaderMaterial
 
 # The level's scene, rebuilt for every level.
 var level_root: Node3D
@@ -52,6 +56,8 @@ var tower_nodes: Array[MeshInstance3D] = []
 var tower_mats: Array[ShaderMaterial] = []
 var gate_node: MeshInstance3D
 var gate_mat: ShaderMaterial
+var door_bars: Array = []       # per door: three MeshInstance3D
+var door_mats: Array[ShaderMaterial] = []
 
 var ship: MeshInstance3D
 var ship_mat: ShaderMaterial
@@ -141,10 +147,11 @@ func _build_scene() -> void:
 	env.ambient_light_energy = 0.12
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.glow_enabled = true
-	env.glow_intensity = 0.55
-	env.glow_strength = 1.0
+	# Less glow since 2026-10-20 ("lite för mycket glow överlag").
+	env.glow_intensity = 0.32
+	env.glow_strength = 0.9
 	env.glow_bloom = 0.0
-	env.glow_hdr_threshold = 1.0
+	env.glow_hdr_threshold = 1.2
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
 	for level in 7:
 		env.set_glow_level(level, 1.0 if level >= 1 and level <= 5 else 0.0)
@@ -160,11 +167,31 @@ func _build_scene() -> void:
 	sun.directional_shadow_max_distance = 30.0
 	add_child(sun)
 
+	# The 3D world is drawn into a viewport of its own, so the trails can be
+	# made from it without the HUD (which the root viewport draws on top).
+	view3d = SubViewport.new()
+	view3d.msaa_3d = Viewport.MSAA_2X
+	view3d.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	view3d.size = get_window().size
+	add_child(view3d)
 	camera = Camera3D.new()
 	camera.fov = 46.0
 	camera.near = 0.2
 	camera.far = 200.0
-	add_child(camera)
+	view3d.add_child(camera)
+
+	trail_vp = SubViewport.new()
+	trail_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	trail_vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
+	trail_vp.size = view3d.size
+	add_child(trail_vp)
+	var trail_rect := ColorRect.new()
+	trail_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	trail_mat = ShaderMaterial.new()
+	trail_mat.shader = load("res://shaders/trail.gdshader")
+	trail_mat.set_shader_parameter("current", view3d.get_texture())
+	trail_rect.material = trail_mat
+	trail_vp.add_child(trail_rect)
 
 	# The ship.
 	ship_mat = _neon_material(false)
@@ -300,6 +327,36 @@ func _build_level() -> void:
 		tower_nodes.push_back(node)
 		tower_mats.push_back(mat)
 
+	# The doors up the exit corridor: two posts and three bars each, in its
+	# zone's colour. A bar goes with every tower of its wave that falls.
+	door_bars.clear()
+	door_mats.clear()
+	for door in game.door_states():
+		var r: Rect2 = door.rect
+		var g: float = door.ground
+		var mat := _neon_material(false)
+		mat.set_shader_parameter("base_color", door.color)
+		mat.set_shader_parameter("body_energy", 0.5)
+		mat.set_shader_parameter("edge_energy", 2.5)
+		mat.set_shader_parameter("albedo_amount", 0.1)
+		var post_faces := []
+		for x in [r.position.x - 0.12, r.end.x]:
+			post_faces.append_array(Meshes.box(Vector3(x, g - 0.5, r.position.y - 0.04), Vector3(x + 0.12, g + 1.3, r.end.y + 0.04)))
+		var posts := MeshInstance3D.new()
+		posts.mesh = Meshes._merge_runs(post_faces, 6)
+		posts.material_override = mat
+		level_root.add_child(posts)
+		var bars := []
+		for k in 3:
+			var y := g + 0.3 + 0.36 * k
+			var bar := MeshInstance3D.new()
+			bar.mesh = Meshes.solid(Meshes.box(Vector3(r.position.x, y, r.position.y + 0.08), Vector3(r.end.x, y + 0.1, r.end.y - 0.08)))
+			bar.material_override = mat
+			level_root.add_child(bar)
+			bars.push_back(bar)
+		door_bars.push_back(bars)
+		door_mats.push_back(mat)
+
 	# The gate.
 	gate_mat = _neon_material(false)
 	gate_mat.set_shader_parameter("body_energy", 0.6)
@@ -359,15 +416,15 @@ func _multimesh(mesh: Mesh, mat: Material, cap: int, shadows := true) -> MultiMe
 
 func _build_overlay() -> void:
 	var fx_layer := CanvasLayer.new()
-	fx_layer.layer = 1
+	fx_layer.layer = 0
 	add_child(fx_layer)
 	postfx = ColorRect.new()
 	postfx.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	postfx.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	postfx_mat = ShaderMaterial.new()
 	postfx_mat.shader = load("res://shaders/postfx.gdshader")
+	postfx_mat.set_shader_parameter("scene", trail_vp.get_texture())
 	postfx.material = postfx_mat
-	postfx.visible = false
 	fx_layer.add_child(postfx)
 
 	var hud_layer := CanvasLayer.new()
@@ -505,7 +562,7 @@ func _paused() -> void:
 
 ## The direction from the ship to the mouse on the floor, in the level's plane.
 func _mouse_aim() -> Vector2:
-	var mouse := get_viewport().get_mouse_position()
+	var mouse := get_viewport().get_mouse_position() / get_viewport().get_visible_rect().size * Vector2(view3d.size)
 	var origin := camera.project_ray_origin(mouse)
 	var dir := camera.project_ray_normal(mouse)
 	var ship_at := game.ship_position()
@@ -538,7 +595,7 @@ func _draw_world(delta: float) -> void:
 	_fill(bullet_mm, game.bullet_buffer(BULLET_CAP))
 	_fill(spark_mm, game.spark_buffer(SPARK_CAP))
 	if _flag("--counts") and Engine.get_process_frames() % 60 == 0:
-		print("t %.1f sparks %d zone %d section %s towers %d gate %s phase %d score %d" % [clock, spark_mm.visible_instance_count,
+		print("t %.1f slow %.2f sparks %d zone %d section %s towers %d gate %s phase %d score %d" % [clock, d.slow_amount, spark_mm.visible_instance_count,
 			d.zone, d.section_name, d.towers_left, d.gate_open, d.phase, d.score])
 	_fill(pickup_mm, game.pickup_buffer(PICKUP_CAP))
 	_fill(ring_mm, game.ring_buffer(RING_CAP))
@@ -561,13 +618,25 @@ func _draw_world(delta: float) -> void:
 	for i in tower_nodes.size():
 		var t: Dictionary = d.towers[i]
 		var node := tower_nodes[i]
-		node.visible = float(t.fall) < 1.0
-		node.position = t.pos - Vector3(0, float(t.fall) * (TOWER_HEIGHT + 1.0), 0)
+		node.visible = t.active and float(t.fall) < 1.0
+		var sink := float(t.fall) + (1.0 - float(t.rise))
+		node.position = t.pos - Vector3(0, sink * (TOWER_HEIGHT + 1.0), 0)
 		node.rotation.y += delta * (0.4 + 1.6 * (1.0 - float(t.health)))
 		var c: Color = t.color
 		var weak := float(t.health) < 0.25 and fmod(clock * 9.0, 1.0) < 0.3
 		tower_mats[i].set_shader_parameter("base_color", c.lerp(Color.WHITE, float(t.flash) * 0.6) * (0.4 if weak else 1.0))
 		tower_mats[i].set_shader_parameter("kick", d.kick)
+
+	# Doors: their bars as the towers stand; an open door's posts go dim.
+	var door_data := game.door_states()
+	for i in door_bars.size():
+		var door: Dictionary = door_data[i]
+		for k in 3:
+			door_bars[i][k].visible = door.bars[k]
+		var dc: Color = door.color
+		door_mats[i].set_shader_parameter("base_color", Color(dc, 0.25) if door.open else dc)
+		door_mats[i].set_shader_parameter("kick", d.kick)
+	d.doors = door_data
 
 	# The gate: small and dim where it will open; open, big, bright and turning.
 	var g: Dictionary = d.gate
@@ -583,6 +652,8 @@ func _draw_world(delta: float) -> void:
 	# Camera: follows the ship; in slow motion it closes in from 100 to 150%
 	# over the slow motion, logarithmically.
 	var want := game.ship_position() if playing else game.start_position()
+	if _flag("--lookexit"):
+		want = (d.gate.pos as Vector3) + Vector3(0, 0, 5.0)
 	want.y = 0.0
 	var zoom := pow(1.5, float(d.slow_progress) * slow_a)
 	cam_target = cam_target.lerp(want, 1.0 - exp(-delta * 5.0))
@@ -591,13 +662,18 @@ func _draw_world(delta: float) -> void:
 	camera.position = cam_target + back * (DISTANCE / zoom) + Vector3(shake.x, 0.0, shake.y)
 	camera.look_at(cam_target + Vector3(shake.x, 0.0, shake.y) * 0.5, Vector3.UP)
 
-	# Flash on deaths and bombs; slow motion's blur and aberration round the ship.
+	# Flash on deaths and bombs; slow motion's trails, and its blur and
+	# aberration round the ship. The trail keeps 85% per sixtieth of a second,
+	# whatever the frame rate, as in the 2D game.
 	env.tonemap_exposure = 1.0 + float(d.flash) if playing else 1.0
-	postfx.visible = slow_a > 0.002
-	if postfx.visible:
-		var vp := get_viewport().get_visible_rect().size
-		postfx_mat.set_shader_parameter("centre", camera.unproject_position(game.ship_position()) / vp)
-		postfx_mat.set_shader_parameter("amount", slow_a)
+	var px := get_window().size
+	if view3d.size != px:
+		view3d.size = px
+		trail_vp.size = px
+	trail_mat.set_shader_parameter("keep", slow_a * pow(0.85, delta * 60.0))
+	postfx_mat.set_shader_parameter("centre", camera.unproject_position(game.ship_position()) / Vector2(view3d.size))
+	postfx_mat.set_shader_parameter("amount", slow_a)
+	hud.view_size = Vector2(view3d.size)
 
 	hud.mode = 0 if screen == Screen.MENU else 1
 	hud.data = d

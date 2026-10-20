@@ -39,63 +39,69 @@ namespace np
         const int variant = ((levelIndex % 3) + 3) % 3;
 
         // The triangle: chorus at the top, verse bottom left, bridge bottom
-        // right. Rooms are 18 x 16 m, a little more than a screen; the passages
-        // 4 m wide and 8 m long.
-        w = 4800.0f;
-        h = 4400.0f;
-        roomList[0] = { { 200.0f,  2600.0f, 2000.0f, 4200.0f }, 0, true,  false };   // verse: hills
-        roomList[1] = { { 1500.0f, 200.0f,  3300.0f, 1800.0f }, 1, false, true  };   // chorus: walls
-        roomList[2] = { { 2800.0f, 2600.0f, 4600.0f, 4200.0f }, 2, true,  true  };   // bridge: both
+        // right, and above the chorus the corridor out. Rooms are 22 x 19 m
+        // (18 x 16 until 2026-10-20, "gör zonerna lite större"); the passages
+        // 4 m wide and 8 m long; the exit corridor 6 m wide and 12 m long.
+        w = 5600.0f;
+        h = 6200.0f;
+        exitRect = { 2500.0f, 200.0f, 3100.0f, 1400.0f };
+        roomList[1] = { { 1700.0f, 1400.0f, 3900.0f, 3300.0f }, 1, false, true  };   // chorus: walls
+        roomList[0] = { { 200.0f,  4100.0f, 2400.0f, 6000.0f }, 0, true,  false };   // verse: hills
+        roomList[2] = { { 3200.0f, 4100.0f, 5400.0f, 6000.0f }, 2, true,  true  };   // bridge: both
 
         passageList = {
-            { 2000.0f, 3200.0f, 2800.0f, 3600.0f },    // verse - bridge
-            { 1600.0f, 1800.0f, 2000.0f, 2600.0f },    // verse - chorus
-            { 2800.0f, 1800.0f, 3200.0f, 2600.0f } };  // bridge - chorus
+            { 2400.0f, 4850.0f, 3200.0f, 5250.0f },    // verse - bridge
+            { 1950.0f, 3300.0f, 2350.0f, 4100.0f },    // verse - chorus
+            { 3250.0f, 3300.0f, 3650.0f, 4100.0f },    // bridge - chorus
+            exitRect };
 
         const Rect& verse = roomList[0].r;
         const Rect& chorus = roomList[1].r;
         const Rect& bridge = roomList[2].r;
 
-        startPos = verse.at (0.62f, 0.55f);
-        gatePos = startPos;
-        towerPos[0] = verse.at (0.25f, 0.30f);
-        towerPos[1] = chorus.at (0.5f, 0.5f);
-        towerPos[2] = bridge.at (0.62f, 0.5f);
+        // Six doors up the corridor, two cells thick, in zone order from the
+        // chorus end: verse, chorus, bridge, verse, chorus, bridge.
+        for (int d = 0; d < kDoors; ++d)
+        {
+            const float y = exitRect.y1 - 160.0f - (float) d * 150.0f;
+            doorList[(size_t) d] = { exitRect.x0, y - 20.0f, exitRect.x1, y + 20.0f };
+            doorIsOpen[(size_t) d] = false;
+        }
+        gatePos = { exitRect.centre().x, exitRect.y0 + 160.0f };
 
-        // Walls: a layout per level, the chorus's round its tower.
+        // Walls: a layout per level.
         wallList.clear();
         switch (variant)
         {
             case 0:
-                for (float u : { 0.27f, 0.73f })
-                    for (float v : { 0.27f, 0.73f })
-                        wallList.push_back (block (chorus, u, v, 180.0f, 180.0f));
-                wallList.push_back (block (bridge, 0.30f, 0.40f, 90.0f, 600.0f));
-                wallList.push_back (block (bridge, 0.80f, 0.75f, 500.0f, 90.0f));
+                for (float u : { 0.30f, 0.70f })
+                    for (float v : { 0.33f, 0.67f })
+                        wallList.push_back (block (chorus, u, v, 200.0f, 200.0f));
+                wallList.push_back (block (bridge, 0.32f, 0.42f, 90.0f, 700.0f));
+                wallList.push_back (block (bridge, 0.78f, 0.60f, 600.0f, 90.0f));
                 break;
 
             case 1:
-                wallList.push_back (block (chorus, 0.5f, 0.22f, 700.0f, 90.0f));
-                wallList.push_back (block (chorus, 0.5f, 0.78f, 700.0f, 90.0f));
-                wallList.push_back (block (chorus, 0.14f, 0.5f, 90.0f, 420.0f));
-                wallList.push_back (block (chorus, 0.86f, 0.5f, 90.0f, 420.0f));
-                wallList.push_back (block (bridge, 0.30f, 0.28f, 500.0f, 90.0f));
-                wallList.push_back (block (bridge, 0.30f, 0.72f, 500.0f, 90.0f));
+                wallList.push_back (block (chorus, 0.5f, 0.30f, 800.0f, 90.0f));
+                wallList.push_back (block (chorus, 0.5f, 0.70f, 800.0f, 90.0f));
+                wallList.push_back (block (chorus, 0.12f, 0.5f, 90.0f, 500.0f));
+                wallList.push_back (block (chorus, 0.88f, 0.5f, 90.0f, 500.0f));
+                wallList.push_back (block (bridge, 0.32f, 0.30f, 600.0f, 90.0f));
+                wallList.push_back (block (bridge, 0.32f, 0.70f, 600.0f, 90.0f));
                 break;
 
             default:
                 for (float su : { -1.0f, 1.0f })
                     for (float sv : { -1.0f, 1.0f })
                     {
-                        const Vec2 c = chorus.centre() + Vec2 { su * 380.0f, sv * 380.0f };
-                        wallList.push_back ({ std::min (c.x, c.x - su * 300.0f), c.y - 45.0f, std::max (c.x, c.x - su * 300.0f), c.y + 45.0f });
-                        wallList.push_back ({ c.x - 45.0f, std::min (c.y, c.y - sv * 300.0f), c.x + 45.0f, std::max (c.y, c.y - sv * 300.0f) });
+                        const Vec2 c = chorus.centre() + Vec2 { su * 460.0f, sv * 420.0f };
+                        wallList.push_back ({ std::min (c.x, c.x - su * 320.0f), c.y - 45.0f, std::max (c.x, c.x - su * 320.0f), c.y + 45.0f });
+                        wallList.push_back ({ c.x - 45.0f, std::min (c.y, c.y - sv * 320.0f), c.x + 45.0f, std::max (c.y, c.y - sv * 320.0f) });
                     }
-                // A fortress round the bridge's tower, open towards the passage it is
-                // reached from last.
-                wallList.push_back (block (bridge, 0.47f, 0.5f, 90.0f, 520.0f));
-                wallList.push_back (block (bridge, 0.60f, 0.31f, 420.0f, 90.0f));
-                wallList.push_back (block (bridge, 0.60f, 0.69f, 420.0f, 90.0f));
+                // A fortress in the bridge, open to the right.
+                wallList.push_back (block (bridge, 0.47f, 0.5f, 90.0f, 620.0f));
+                wallList.push_back (block (bridge, 0.60f, 0.33f, 480.0f, 90.0f));
+                wallList.push_back (block (bridge, 0.60f, 0.67f, 480.0f, 90.0f));
                 break;
         }
 
@@ -106,7 +112,21 @@ namespace np
         for (const auto& r : roomList) carve (r.r, open);
         for (const auto& p : passageList) carve (p, open);
         for (const auto& wl : wallList) carve (wl, wall);
+        for (const auto& d : doorList) carve (d, door);
         buildRim();
+        ++rev;
+
+        // Where everything stands, kept clear of the walls: the start in the
+        // verse, and six tower spots per room — the first wave's three, then
+        // the second's.
+        startPos = placeClear (verse.at (0.62f, 0.55f), 80.0f);
+        const float spots[3][kTowerSpots][2] {
+            { { 0.22f, 0.28f }, { 0.75f, 0.25f }, { 0.25f, 0.78f },  { 0.48f, 0.15f }, { 0.85f, 0.78f }, { 0.12f, 0.52f } },
+            { { 0.50f, 0.50f }, { 0.18f, 0.50f }, { 0.82f, 0.50f },  { 0.50f, 0.18f }, { 0.30f, 0.82f }, { 0.70f, 0.82f } },
+            { { 0.62f, 0.50f }, { 0.25f, 0.18f }, { 0.85f, 0.22f },  { 0.30f, 0.85f }, { 0.88f, 0.80f }, { 0.60f, 0.12f } } };
+        for (int z = 0; z < 3; ++z)
+            for (int k = 0; k < kTowerSpots; ++k)
+                towerSpots[(size_t) z][(size_t) k] = placeClear (roomList[(size_t) z].r.at (spots[z][k][0], spots[z][k][1]), 130.0f);
 
         // Hills: bumps and hollows, mirrored left to right on every other level.
         hcols = (int) std::ceil (w / kHillCell) + 1;
@@ -114,12 +134,12 @@ namespace np
         hills.assign ((size_t) (hcols * hrows), 0.0f);
         const bool mirror = variant == 1;
         const HillSpec verseHills[] {
-            { 0.30f, 0.72f, 440.0f, 160.0f }, { 0.78f, 0.25f, 380.0f, 130.0f },
-            { 0.45f, 0.40f, 320.0f, -100.0f }, { 0.12f, 0.50f, 280.0f,  90.0f },
-            { 0.85f, 0.80f, 320.0f, -90.0f } };
+            { 0.30f, 0.55f, 520.0f, 170.0f }, { 0.65f, 0.20f, 440.0f, 140.0f },
+            { 0.45f, 0.35f, 380.0f, -110.0f }, { 0.10f, 0.30f, 320.0f, 100.0f },
+            { 0.80f, 0.55f, 360.0f, -95.0f }, { 0.55f, 0.85f, 340.0f, 120.0f } };
         const HillSpec bridgeHills[] {
-            { 0.22f, 0.70f, 400.0f, 150.0f }, { 0.40f, 0.15f, 320.0f, -95.0f },
-            { 0.88f, 0.22f, 320.0f, 120.0f }, { 0.80f, 0.90f, 280.0f, -80.0f } };
+            { 0.20f, 0.55f, 460.0f, 160.0f }, { 0.42f, 0.10f, 360.0f, -100.0f },
+            { 0.75f, 0.40f, 360.0f, 130.0f }, { 0.70f, 0.92f, 320.0f, -85.0f } };
         for (const auto& hs : verseHills)
             addHill (roomList[0], verse.at (mirror ? 1.0f - hs.u : hs.u, hs.v), hs.radius, hs.height);
         for (const auto& hs : bridgeHills)
@@ -127,6 +147,33 @@ namespace np
 
         fcols = (int) std::ceil (w / kFlowCell);
         frows = (int) std::ceil (h / kFlowCell);
+    }
+
+    void Level::openDoor (int d)
+    {
+        if (d < 0 || d >= kDoors || doorIsOpen[(size_t) d]) return;
+        doorIsOpen[(size_t) d] = true;
+        carve (doorList[(size_t) d], open);
+        ++rev;
+    }
+
+    Vec2 Level::placeClear (Vec2 want, float clearance) const
+    {
+        auto clear = [&] (Vec2 p)
+        {
+            if (solid (p)) return false;
+            for (int k = 0; k < 12; ++k)
+                if (solid (p + fromAngle (kTau * (float) k / 12.0f, clearance))) return false;
+            return true;
+        };
+        if (clear (want)) return want;
+        for (float r = 20.0f; r < 800.0f; r += 20.0f)
+            for (int k = 0; k < 24; ++k)
+            {
+                const Vec2 p = want + fromAngle (kTau * (float) k / 24.0f, r);
+                if (clear (p)) return p;
+            }
+        return want;
     }
 
     void Level::carve (const Rect& r, Cell type)
@@ -153,8 +200,9 @@ namespace np
                 // round the start, the gate and the tower, so those stand level.
                 const float edge = std::min ({ p.x - room.r.x0, room.r.x1 - p.x, p.y - room.r.y0, room.r.y1 - p.y });
                 float fade = smooth (60.0f, 260.0f, edge);
-                for (const Vec2 flat : { startPos, gatePos, towerPos[(size_t) room.zone] })
-                    fade *= smooth (180.0f, 380.0f, (p - flat).length());
+                fade *= smooth (180.0f, 380.0f, (p - startPos).length());
+                for (const Vec2 flat : towerSpots[(size_t) room.zone])
+                    fade *= smooth (160.0f, 340.0f, (p - flat).length());
                 if (fade <= 0.0f) continue;
 
                 const float k = 1.0f - (d / radius) * (d / radius);
@@ -165,10 +213,12 @@ namespace np
     void Level::buildRim()
     {
         rimList.clear();
+        // Doors stand on floor: the corridor's edges run past them.
         auto at = [this] (int c, int r) -> Cell
         {
             if (c < 0 || r < 0 || c >= cols || r >= rows) return voidCell;
-            return cells[(size_t) (r * cols + c)];
+            const Cell cell = cells[(size_t) (r * cols + c)];
+            return cell == door ? open : cell;
         };
 
         // Horizontal edges between rows r-1 and r, merged into runs.
@@ -345,8 +395,9 @@ namespace np
         }
 
         const int index = tr * fcols + tc;
-        if (index == f.target && ! f.dist.empty()) return;
+        if (index == f.target && f.revision == rev && ! f.dist.empty()) return;
         f.target = index;
+        f.revision = rev;
 
         constexpr float inf = std::numeric_limits<float>::max();
         f.dist.assign ((size_t) (fcols * frows), inf);

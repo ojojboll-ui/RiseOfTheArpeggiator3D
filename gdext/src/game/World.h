@@ -20,9 +20,14 @@
 
     In the 3D game (2026-10-19) the world still lives in a plane, x right and
     y down, in centimetres, and draws nothing; Godot reads what is where and
-    stands it up. A level is three rooms (Level.h), each a section of the song
-    with a tower in its colour. Shoot all three down and the gate opens where
-    the ship started; fly into it for the next song.
+    stands it up. A level is three rooms (Level.h), each a section of the song.
+
+    Since 2026-10-20 the towers come in two waves of three, one in each room
+    and its colour: the first take half the hits, and when all three are down
+    the second three rise, as strong as the towers were before. Every tower
+    felled takes away one of the six doors in the exit corridor at the top,
+    the door of its zone and wave. With all six gone the gate at the top
+    opens; fly into it for the next song.
 */
 namespace np
 {
@@ -110,15 +115,23 @@ namespace np
             bool alive = true;
         };
 
-        /** A zone's tower: shoot it down. It sends out enemies while the ship
-            is in its room. */
+        /** A zone's tower: shoot it down. Towers send out enemies while the
+            ship is in their room. A second-wave tower is inactive — under the
+            floor — until the first wave of its zone is down, then rises. */
         struct Tower
         {
             Vec2 pos;
-            int zone = 0;
-            float hp = 1.0f, maxHp = 1.0f, flash = 0.0f, radius = 62.0f, fall = 0.0f;
-            bool alive = true;
+            int zone = 0, wave = 0, slot = 0;
+            float hp = 1.0f, maxHp = 1.0f, flash = 0.0f, radius = 62.0f, fall = 0.0f, rise = 1.0f;
+            bool alive = true, active = true;
+            bool solidNow() const { return alive && active; }
+            bool shootable() const { return alive && active && rise >= 1.0f; }
         };
+        static constexpr int kTowers = 6;
+
+        /** A door in the exit corridor, drawn as three bars; it goes when the
+            tower of its zone and wave falls. */
+        struct Door { int zone = 0, wave = 0; std::array<bool, 3> bars { true, true, true }; bool open = false; };
 
         struct Gate { Vec2 pos; bool open = false; float openTime = 0.0f; };
 
@@ -147,7 +160,9 @@ namespace np
         const std::vector<Pickup>& pickupList() const { return pickups; }
         const std::vector<Popup>& popupList() const { return popups; }
         const std::vector<Ring>& ringList() const { return rings; }
-        const std::array<Tower, 3>& towerList() const { return towers; }
+        const std::array<Tower, kTowers>& towerList() const { return towers; }
+        const std::array<Door, Level::kDoors>& doorList() const { return doors; }
+        int doorsLeft() const;
         const Gate& gateState() const { return gate; }
         const Grid& floor() const { return grid; }
         const Level& ground() const { return lvl; }
@@ -202,6 +217,7 @@ namespace np
         void detonateBomb();
         void addScore (int amount, Vec2 where);
         void say (const std::string& text, float life, Color color);
+        void placeTowers();
 
         /** Where a sound sits left to right: measured from the ship, since the
             camera follows it. */
@@ -224,7 +240,8 @@ namespace np
         std::vector<Pickup> pickups;
         std::vector<Popup> popups;
         std::vector<Ring> rings;
-        std::array<Tower, 3> towers {};
+        std::array<Tower, kTowers> towers {};
+        std::array<Door, Level::kDoors> doors {};
         Gate gate;
         int shipZone = 0, lastWaveZone = 0;
 

@@ -93,6 +93,7 @@ public:
     Array level_rooms() const;                 // { rect: Rect2, zone, color }
     Array tower_states() const;                // { pos, zone, health, alive, flash, fall, color }
     Dictionary gate_state() const;             // { pos, open, time }
+    Array door_states() const;                 // { rect: Rect2, zone, bars: [bool x3], open, color }
     Vector3 start_position() const;
     float floor_height (Vector3 at) const;
 

@@ -43,10 +43,20 @@ namespace np
                 if (t.live && dist < nearestD) { nearestD = dist; nearest = &t; }
             }
 
-            // Where to go: the gate once it is open, else the first tower still
-            // standing in song order — verse, chorus, bridge.
+            // Where to go: the gate once it is open, else the nearest standing
+            // tower of the first zone, in song order — verse, chorus, bridge —
+            // that still has any.
             const World::Tower* tower = nullptr;
-            for (const auto& t : world.towerList()) if (t.alive) { tower = &t; break; }
+            for (int z = 0; z < 3 && ! tower; ++z)
+            {
+                float best = 1.0e9f;
+                for (const auto& t : world.towerList())
+                {
+                    if (t.zone != z || ! t.alive || ! t.active) continue;
+                    const float d = (t.pos - me).length();
+                    if (d < best) { best = d; tower = &t; }
+                }
+            }
             const Vec2 goal = world.gateState().open ? world.gateState().pos : (tower ? tower->pos : lvl.start());
 
             flowTimer -= dt;
@@ -72,8 +82,10 @@ namespace np
             if (! reckless)
             {
                 // Shoot what is close; else the tower, when it can be seen; else
-                // whatever is in sight.
-                if (nearest && nearestD < 520.0f && lvl.lineOfSight (me, nearest->pos))
+                // whatever is in sight. Near a tower only what is really close
+                // takes the aim off it.
+                const bool atTower = tower && goalD < 650.0f && lvl.lineOfSight (me, tower->pos);
+                if (nearest && nearestD < (atTower ? 260.0f : 520.0f) && lvl.lineOfSight (me, nearest->pos))
                     aimAt (c, me, nearest->pos + nearest->vel * (nearestD / kBulletSpeed));
                 else if (tower && goalD < 850.0f && lvl.lineOfSight (me, tower->pos))
                     aimAt (c, me, tower->pos);
