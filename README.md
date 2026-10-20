@@ -11,11 +11,14 @@ This is the 3D successor of
 The band and the rules are the same C++ code, running inside Godot as a
 GDExtension; Godot draws the world.
 
-**Status: stage 1 of 5.** The 2D game's gameplay, sound and slow motion on a 3D
-floor. Still to come: a larger level with verse, chorus and bridge zones that
-change the chords, three towers to shoot down to open the gate to the next
-level, terrain with walls, peaks and valleys, and a final pass on looks and
-menus.
+**A level** is three rooms joined by narrower passages, each a section of the
+song with its own four chords: the **verse** (hills and valleys), the
+**chorus** (walls) and the **bridge** (both). Flying into a room changes the
+section on the next bar. Each room has a tower in its colour; shoot all three
+down and the gate opens where you started. Fly into it for the next song —
+PULSE, then ACID, then STARFALL — with your score, lives and bombs.
+
+Still to come: trails in slow motion, and a pass on looks and menus.
 
 ## Controls
 
@@ -61,8 +64,9 @@ build.bat audiotest ..\..\out
 ```
 
 `audiotest` plays every song with scripted input at two buffer sizes and
-requires bit-identical output, checks layers, deaths, drops, slow motion and
-build-ups, and writes a WAV per song.
+requires bit-identical output, checks layers, deaths, drops, slow motion,
+build-ups and section changes, and writes a WAV per song. `build.bat
+zonepreview ..\..\out` renders each song through its sections.
 
 The game takes flags after `--`: `--demo` (the autopilot plays), `--level N`,
 `--difficulty easy|normal|hard`, `--seconds T`, `--shots DIR --every S`
@@ -73,7 +77,7 @@ The game takes flags after `--`: `--demo` (the autopilot plays), `--level N`,
 | | |
 |---|---|
 | `gdext/src/audio/` | The band: conductor, songs, synths, drums (from the 2D game) |
-| `gdext/src/game/` | The rules and the autopilot (from the 2D game, drawing taken out) |
+| `gdext/src/game/` | The rules and the autopilot; `Level` is the rooms, walls, hills and way-finding |
 | `gdext/src/arp_game.*` | The Godot node: steps the world, hands Godot what to draw |
 | `gdext/src/band_stream.*` | The band as an AudioStream on Godot's mixing thread |
 | `scripts/` | Scene, camera, lowpoly models, HUD and menu, input |

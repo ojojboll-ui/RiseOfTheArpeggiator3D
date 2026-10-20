@@ -5,28 +5,27 @@
 
 #include "../audio/Conductor.h"
 #include "Grid.h"
+#include "Level.h"
 #include "Math.h"
 
 /**
-    The field, everything on it, and the rules.
+    The level, everything on it, and the rules.
 
     The world never decides *when* anything musical happens. It reads the band
     (bar, beat, layer, chord) and reacts: a Shot event from the arpeggio is
     when a bullet leaves the ship, a Bar event is when a wave arrives, the end
     of a death's drop is when the ship comes back. What it sends the other way
     is intent — which chord the left stick points at, whether the right one is
-    out, and what died where.
+    out, what died where, and which zone the ship is in.
 
-    In the 3D game (2026-10-19) the world still lives in the 2D game's plane
-    and units: x right, y down, the old field's pixels. It draws nothing.
-    Godot reads what is where through the accessors below and stands it up on
-    the floor; heights come from the floor's waves (Grid) and the sparks' own z.
+    In the 3D game (2026-10-19) the world still lives in a plane, x right and
+    y down, in centimetres, and draws nothing; Godot reads what is where and
+    stands it up. A level is three rooms (Level.h), each a section of the song
+    with a tower in its colour. Shoot all three down and the gate opens where
+    the ship started; fly into it for the next song.
 */
 namespace np
 {
-    /** The playfield, in the 2D game's units. */
-    constexpr float kFieldL = 30.0f, kFieldT = 84.0f, kFieldR = 1890.0f, kFieldB = 1050.0f;
-
     constexpr float kShipSpeed   = 560.0f;
     constexpr float kBulletSpeed = 1500.0f;
 
@@ -61,18 +60,19 @@ namespace np
     public:
         enum class Phase { playing, dead, gameOver, cleared };
 
-        explicit World (audio::Conductor& bandIn, std::uint32_t seed = 0x2f6b9a1du) : band (bandIn)
-        {
-            rng.s = seed | 1u;
-            grid.build (kFieldL, kFieldT, kFieldR, kFieldB, 40.0f);
-        }
+        /** What a run takes from one level to the next. */
+        struct Carry { int score = 0, lives = 0, bombs = 0; };
 
-        void start (int level, int difficultyIndex = 1);
+        explicit World (audio::Conductor& bandIn, std::uint32_t seed = 0x2f6b9a1du);
+
+        void start (int level, int difficultyIndex = 1, const Carry* carry = nullptr);
         int difficultyIndex() const { return diff; }
         void update (float dt, const Controls& in);
         void onEvent (const audio::Event& e);
+        Carry carry() const { return { points, lives, bombs }; }
 
-        /** Floor and sparks only — for the menu's background. */
+        /** Floor and sparks only — for the menu's background, round the
+            verse room's start. */
         void updateAmbient (float dt);
 
         Phase phase() const { return state; }
@@ -110,6 +110,18 @@ namespace np
             bool alive = true;
         };
 
+        /** A zone's tower: shoot it down. It sends out enemies while the ship
+            is in its room. */
+        struct Tower
+        {
+            Vec2 pos;
+            int zone = 0;
+            float hp = 1.0f, maxHp = 1.0f, flash = 0.0f, radius = 62.0f, fall = 0.0f;
+            bool alive = true;
+        };
+
+        struct Gate { Vec2 pos; bool open = false; float openTime = 0.0f; };
+
         struct Bullet { Vec2 pos, vel; int chord = 0, note = -1; float life = 1.5f; bool accent = false; bool alive = true; };
 
         /** A spark. It flies in the plane like the 2D game's and, now that the
@@ -135,8 +147,17 @@ namespace np
         const std::vector<Pickup>& pickupList() const { return pickups; }
         const std::vector<Popup>& popupList() const { return popups; }
         const std::vector<Ring>& ringList() const { return rings; }
+        const std::array<Tower, 3>& towerList() const { return towers; }
+        const Gate& gateState() const { return gate; }
         const Grid& floor() const { return grid; }
+        const Level& ground() const { return lvl; }
         Vec2 aim() const { return aimDir; }
+        int zone() const { return shipZone; }
+        int towersLeft() const;
+        bool finished() const { return state == Phase::cleared && level >= 2; }
+
+        /** The ground's height under a point: hills and the floor's waves. */
+        float heightAt (Vec2 p) const { return lvl.terrain (p) + grid.heightAt (p); }
 
         int lifeCount() const { return lives; }
         int multiplierValue() const { return multiplier; }
@@ -157,7 +178,10 @@ namespace np
         // Rules ------------------------------------------------------------------
         void updateShip (float dt, const Controls& in);
         void updateChordRequest (Vec2 move);
+        void updateZone();
         void updateEnemies (float dt);
+        void updateTowers (float dt);
+        void updateGate (float dt);
         void updateBullets (float dt);
         void updateParticles (float dt);
         void updatePickups (float dt);
@@ -165,14 +189,19 @@ namespace np
 
         void spawnShot (int note, int chord, int index, bool accent);
         void spawnWave (int bar, bool half);
+        void towerBurst (Tower& t);
         void spawnEnemy (EnemyKind kind, Vec2 pos, float delay = 0.0f);
         Vec2 farPoint (float minDist);
+        Vec2 chaseDirection (Vec2 from) const;
+        Vec2 keepOut (Vec2 p, float radius, Vec2* normal = nullptr) const;
         void kill (Enemy& e, int chord, bool scored, bool sounded, int note = -1);
-        void explode (Vec2 pos, Color a, Color b, int count, float speed, float life);
+        void destroyTower (Tower& t, int chord);
+        void explode (Vec2 pos, Color a, Color b, int count, float speed, float life, float up = 0.75f);
         void shipDies();
         void respawn();
         void detonateBomb();
         void addScore (int amount, Vec2 where);
+        void say (const std::string& text, float life, Color color);
 
         /** Where a sound sits left to right: measured from the ship, since the
             camera follows it. */
@@ -180,7 +209,10 @@ namespace np
 
         audio::Conductor& band;
         Rng rng;
+        Level lvl;
         Grid grid;
+        Level::Flow chase;
+        float chaseTimer = 0.0f;
 
         Phase state = Phase::playing;
         int level = 0, diff = 1;
@@ -192,6 +224,9 @@ namespace np
         std::vector<Pickup> pickups;
         std::vector<Popup> popups;
         std::vector<Ring> rings;
+        std::array<Tower, 3> towers {};
+        Gate gate;
+        int shipZone = 0, lastWaveZone = 0;
 
         int points = 0, lives = 3, bombs = 3, multiplier = 1, killsSinceDeath = 0;
         static constexpr int kLifeEvery = 150000, kBombEvery = 120000;
@@ -224,4 +259,7 @@ namespace np
     /** Per-level looks. */
     Color levelTint (int level);
     Color levelAccent (int level);
+
+    /** The three zones' colours on a level: the floor's grid, the tower. */
+    Color zoneColor (int level, int zone);
 }

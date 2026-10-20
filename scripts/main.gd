@@ -3,8 +3,9 @@ extends Node3D
 ##
 ## The rules and the band run in the GDExtension (ArpGame); this script reads
 ## the controls, steps the game once a frame and puts what it reports on the
-## floor: lowpoly enemies, the ship, bullets and sparks as MultiMeshes, the
-## floor's waves through a height texture, the HUD on top.
+## level: its floor with hills, waves and zones, the walls, the towers and the
+## gate, lowpoly enemies, the ship, bullets and sparks as MultiMeshes, and the
+## HUD on top.
 ##
 ## Flags after `--`, for testing without a pad:
 ##   --demo            the autopilot plays (starts straight into a level)
@@ -15,7 +16,7 @@ extends Node3D
 ##   --wav PATH        record what the band played
 ##   --reckless        the autopilot flies unarmed, to test deaths
 ##   --slowtest        the autopilot holds slow motion 3 s in every 12
-##   --counts          print spark and bullet counts and slow motion once a second
+##   --counts          print counts and state once a second
 
 const ENEMY_CAP := 256
 const BULLET_CAP := 768
@@ -25,7 +26,9 @@ const RING_CAP := 32
 
 const PITCH := deg_to_rad(57.0)     # how steeply the camera looks down
 const DISTANCE := 12.5              # metres from what it looks at
-const FOLLOW := 0.45                # how far it follows the ship off centre
+const RIM_HEIGHT := 0.5             # the rooms' edges, metres
+const WALL_HEIGHT := 0.8            # walls inside the rooms, above the highest ground under them
+const TOWER_HEIGHT := 2.6
 
 enum Screen { MENU, GAME, PAUSED }
 
@@ -38,10 +41,18 @@ var hud: Control
 var postfx: ColorRect
 var postfx_mat: ShaderMaterial
 
+# The level's scene, rebuilt for every level.
+var level_root: Node3D
 var floor_mat: ShaderMaterial
-var floor_img: Image
-var floor_tex: ImageTexture
-var frame_mat: ShaderMaterial
+var wave_img: Image
+var wave_tex: ImageTexture
+var edge_mats: Array[ShaderMaterial] = []
+var edge_colors: Array[Color] = []
+var tower_nodes: Array[MeshInstance3D] = []
+var tower_mats: Array[ShaderMaterial] = []
+var gate_node: MeshInstance3D
+var gate_mat: ShaderMaterial
+
 var ship: MeshInstance3D
 var ship_mat: ShaderMaterial
 var enemy_mm: Array[MultiMesh] = []
@@ -54,6 +65,7 @@ var screen := Screen.MENU
 var selected := 0
 var difficulty := 1
 var idle := 0.0
+var clear_time := 0.0
 var best := [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
 var clock := 0.0
 var cam_target := Vector3.ZERO
@@ -89,6 +101,8 @@ func _ready() -> void:
 
 	_build_scene()
 	_build_overlay()
+	_build_level()
+	cam_target = game.start_position()
 
 	if demo:
 		_start(start_level, true)
@@ -139,11 +153,11 @@ func _build_scene() -> void:
 	add_child(we)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation = Vector3(deg_to_rad(-62.0), deg_to_rad(-35.0), 0.0)
-	sun.light_energy = 0.9
+	sun.rotation = Vector3(deg_to_rad(-55.0), deg_to_rad(-35.0), 0.0)
+	sun.light_energy = 1.1
 	sun.light_color = Color(0.75, 0.8, 1.0)
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 40.0
+	sun.directional_shadow_max_distance = 30.0
 	add_child(sun)
 
 	camera = Camera3D.new()
@@ -151,36 +165,6 @@ func _build_scene() -> void:
 	camera.near = 0.2
 	camera.far = 200.0
 	add_child(camera)
-
-	# The floor: a fine plane the floor shader lifts with the wave heights.
-	var cols := game.floor_columns()
-	var rows := game.floor_rows()
-	var field := game.field_size()
-	var plane := PlaneMesh.new()
-	plane.size = field
-	plane.subdivide_width = (cols - 1) * 4
-	plane.subdivide_depth = (rows - 1) * 4
-	floor_mat = ShaderMaterial.new()
-	floor_mat.shader = load("res://shaders/floor.gdshader")
-	floor_img = Image.create_from_data(cols, rows, false, Image.FORMAT_RF, game.floor_bytes())
-	floor_tex = ImageTexture.create_from_image(floor_img)
-	floor_mat.set_shader_parameter("heights", floor_tex)
-	floor_mat.set_shader_parameter("dims", Vector2(cols, rows))
-	floor_mat.set_shader_parameter("field", field)
-	var floor_node := MeshInstance3D.new()
-	floor_node.mesh = plane
-	floor_node.material_override = floor_mat
-	floor_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(floor_node)
-
-	# The frame round the field: four low neon walls.
-	frame_mat = _neon_material(false)
-	frame_mat.set_shader_parameter("body_energy", 0.25)
-	frame_mat.set_shader_parameter("edge_energy", 3.0)
-	var frame := MeshInstance3D.new()
-	frame.mesh = Meshes.frame(field.x, field.y, 0.08, 0.12)
-	frame.material_override = frame_mat
-	add_child(frame)
 
 	# The ship.
 	ship_mat = _neon_material(false)
@@ -218,6 +202,136 @@ func _build_scene() -> void:
 	ring_mm = _multimesh(Meshes.ring(), ring_mat, RING_CAP, false)
 
 
+## The level's own scene: floor, edges, walls, towers, gate. Called whenever
+## the game moves to another level (the menu shows the first level's verse).
+func _build_level() -> void:
+	if level_root:
+		level_root.queue_free()
+	level_root = Node3D.new()
+	add_child(level_root)
+	edge_mats.clear()
+	edge_colors.clear()
+	tower_nodes.clear()
+	tower_mats.clear()
+
+	var map := game.field_size()
+	var rooms := game.level_rooms()
+	var accent: Color = game.hud().accent
+
+	# Floor: a fine plane the floor shader lifts with the hills and waves.
+	var plane := PlaneMesh.new()
+	plane.size = map
+	plane.subdivide_width = int(map.x / 0.2)
+	plane.subdivide_depth = int(map.y / 0.2)
+	floor_mat = ShaderMaterial.new()
+	floor_mat.shader = load("res://shaders/floor.gdshader")
+	var wc := game.floor_columns()
+	var wr := game.floor_rows()
+	wave_img = Image.create_from_data(wc, wr, false, Image.FORMAT_RF, game.floor_bytes())
+	wave_tex = ImageTexture.create_from_image(wave_img)
+	floor_mat.set_shader_parameter("waves", wave_tex)
+	floor_mat.set_shader_parameter("wave_dims", Vector2(wc, wr))
+	floor_mat.set_shader_parameter("wave_cell", map.x / (wc - 1))
+	var hc := game.hill_columns()
+	var hr := game.hill_rows()
+	var hills := Image.create_from_data(hc, hr, false, Image.FORMAT_RF, game.hill_bytes())
+	floor_mat.set_shader_parameter("hills", ImageTexture.create_from_image(hills))
+	floor_mat.set_shader_parameter("hill_dims", Vector2(hc, hr))
+	floor_mat.set_shader_parameter("hill_cell", game.hill_cell())
+	var ic := game.info_columns()
+	var ir := game.info_rows()
+	var info := Image.create_from_data(ic, ir, false, Image.FORMAT_RGBA8, game.floor_info_bytes())
+	floor_mat.set_shader_parameter("info", ImageTexture.create_from_image(info))
+	floor_mat.set_shader_parameter("info_dims", Vector2(ic, ir))
+	floor_mat.set_shader_parameter("info_cell", map.x / ic)
+	var floor_node := MeshInstance3D.new()
+	floor_node.mesh = plane
+	floor_node.material_override = floor_mat
+	floor_node.position = Vector3(map.x * 0.5, 0.0, map.y * 0.5)
+	floor_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	floor_node.custom_aabb = AABB(Vector3(-map.x, -3, -map.y), Vector3(map.x * 2, 6, map.y * 2))
+	level_root.add_child(floor_node)
+
+	# Edges and walls, in the colour of the room they stand in (passages in
+	# the level's accent): one mesh and material per colour.
+	var groups := {}   # zone -> Array of faces
+	var rim := game.level_rim()
+	for i in range(0, rim.size(), 6):
+		var a := Vector2(rim[i], rim[i + 1])
+		var b := Vector2(rim[i + 2], rim[i + 3])
+		var n := Vector2(rim[i + 4], rim[i + 5])
+		var inside := (a + b) * 0.5 - n * 0.3
+		var outline := PackedVector2Array([a, b, b + n * 0.12, a + n * 0.12])
+		_group(groups, _zone_of(rooms, inside)).append(Meshes.prism_faces(outline, -0.6, RIM_HEIGHT))
+	var walls := game.level_walls()
+	for i in range(0, walls.size(), 5):
+		var lo := Vector3(walls[i], -0.6, walls[i + 1])
+		var hi := Vector3(walls[i + 2], walls[i + 4] + WALL_HEIGHT, walls[i + 3])
+		var centre := Vector2((lo.x + hi.x) * 0.5, (lo.z + hi.z) * 0.5)
+		_group(groups, _zone_of(rooms, centre)).append(Meshes.box(lo, hi))
+	for zone in groups:
+		var st := SurfaceTool.new()
+		for faces in groups[zone]:
+			st.append_from(Meshes.solid(faces), 0, Transform3D.IDENTITY)
+		var mat := _neon_material(false)
+		mat.set_shader_parameter("body_energy", 0.06)
+		mat.set_shader_parameter("albedo_amount", 0.07)
+		mat.set_shader_parameter("edge_energy", 3.2)
+		var color: Color = accent if zone < 0 else _room_color(rooms, zone)
+		mat.set_shader_parameter("base_color", color)
+		var node := MeshInstance3D.new()
+		node.mesh = st.commit()
+		node.material_override = mat
+		level_root.add_child(node)
+		edge_mats.push_back(mat)
+		edge_colors.push_back(color)
+
+	# Towers.
+	for t in game.tower_states():
+		var mat := _neon_material(false)
+		mat.set_shader_parameter("base_color", t.color)
+		mat.set_shader_parameter("body_energy", 0.45)
+		mat.set_shader_parameter("edge_energy", 5.0)
+		var node := MeshInstance3D.new()
+		node.mesh = Meshes.tower(t.radius, TOWER_HEIGHT)
+		node.material_override = mat
+		node.position = t.pos
+		level_root.add_child(node)
+		tower_nodes.push_back(node)
+		tower_mats.push_back(mat)
+
+	# The gate.
+	gate_mat = _neon_material(false)
+	gate_mat.set_shader_parameter("body_energy", 0.6)
+	gate_mat.set_shader_parameter("edge_energy", 6.0)
+	gate_node = MeshInstance3D.new()
+	gate_node.mesh = Meshes.gate(1.0, 0.78, 0.18)
+	gate_node.material_override = gate_mat
+	level_root.add_child(gate_node)
+
+	hud.rooms = rooms
+
+
+func _group(groups: Dictionary, zone: int) -> Array:
+	if not groups.has(zone):
+		groups[zone] = []
+	return groups[zone]
+
+
+func _zone_of(rooms: Array, p: Vector2) -> int:
+	for r in rooms:
+		if r.zone >= 0 and (r.rect as Rect2).grow(0.05).has_point(p):
+			return r.zone
+	return -1
+
+
+func _room_color(rooms: Array, zone: int) -> Color:
+	for r in rooms:
+		if r.zone == zone:
+			return r.color
+	return Color.WHITE
+
+
 func _neon_material(instanced: bool) -> ShaderMaterial:
 	var m := ShaderMaterial.new()
 	m.shader = load("res://shaders/neon_mesh.gdshader")
@@ -237,8 +351,8 @@ func _multimesh(mesh: Mesh, mat: Material, cap: int, shadows := true) -> MultiMe
 	node.multimesh = mm
 	node.material_override = mat
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	# The instances move all over the field; never cull them by the mesh's own box.
-	node.custom_aabb = AABB(Vector3(-20, -5, -20), Vector3(40, 15, 40))
+	# The instances move all over the level; never cull them by the mesh's own box.
+	node.custom_aabb = AABB(Vector3(-10, -5, -10), Vector3(80, 15, 80))
 	add_child(node)
 	return mm
 
@@ -248,7 +362,7 @@ func _build_overlay() -> void:
 	fx_layer.layer = 1
 	add_child(fx_layer)
 	postfx = ColorRect.new()
-	postfx.set_anchors_preset(Control.PRESET_FULL_RECT)
+	postfx.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	postfx.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	postfx_mat = ShaderMaterial.new()
 	postfx_mat.shader = load("res://shaders/postfx.gdshader")
@@ -318,19 +432,25 @@ func _menu(delta: float) -> void:
 
 
 func _start(level: int, autopilot: bool) -> void:
+	start_level = level
 	game.start(level, difficulty, autopilot)
 	screen = Screen.GAME
+	clear_time = 0.0
+	_build_level()
+	cam_target = game.ship_position()
 
 
 func _back_to_menu() -> void:
 	if not game.get_autopilot():
-		var lvl := game.get_level()
+		# Best scores are kept by the song a run started on.
+		var lvl := start_level
 		if game.get_score() > best[difficulty][lvl]:
 			best[difficulty][lvl] = game.get_score()
 			_save_best()
 	game.end_game()
 	screen = Screen.MENU
 	idle = 0.0
+	_build_level()
 
 
 func _play(delta: float) -> void:
@@ -353,13 +473,26 @@ func _play(delta: float) -> void:
 		pad.rumble(0.8, 0.8, 0.3)
 
 	var phase := game.get_phase()
-	if phase == 2 or phase == 3:   # game over, cleared
+	if phase == 2:   # game over
 		if pad.confirm and not auto:
 			_back_to_menu()
 		elif auto and not demo:
 			_back_to_menu()
-		elif demo and phase == 2:
-			_start(game.get_level(), true)
+		elif demo:
+			_start(start_level, true)
+	elif phase == 3:   # through the gate
+		clear_time += delta
+		var last: bool = game.hud().finished
+		if last:
+			if (pad.confirm and not auto) or (auto and clear_time > 6.0):
+				if demo:
+					_start(0, true)
+				else:
+					_back_to_menu()
+		elif clear_time > 4.0 or (pad.confirm and not auto):
+			game.next_level()
+			clear_time = 0.0
+			_build_level()
 
 
 func _paused() -> void:
@@ -370,7 +503,7 @@ func _paused() -> void:
 		_back_to_menu()
 
 
-## The direction from the ship to the mouse on the floor, in the field's plane.
+## The direction from the ship to the mouse on the floor, in the level's plane.
 func _mouse_aim() -> Vector2:
 	var mouse := get_viewport().get_mouse_position()
 	var origin := camera.project_ray_origin(mouse)
@@ -391,12 +524,12 @@ func _mouse_aim() -> Vector2:
 func _draw_world(delta: float) -> void:
 	var d := game.hud()
 	var playing := screen != Screen.MENU and game.is_running()
+	d.towers = game.tower_states()
+	d.gate = game.gate_state()
 
 	# Floor waves.
-	floor_img.set_data(game.floor_columns(), game.floor_rows(), false, Image.FORMAT_RF, game.floor_bytes())
-	floor_tex.update(floor_img)
-	var tint: Color = hud.songs[selected].tint if not playing else d.tint
-	floor_mat.set_shader_parameter("tint", tint)
+	wave_img.set_data(game.floor_columns(), game.floor_rows(), false, Image.FORMAT_RF, game.floor_bytes())
+	wave_tex.update(wave_img)
 	floor_mat.set_shader_parameter("kick", d.kick)
 
 	# Instances.
@@ -405,7 +538,8 @@ func _draw_world(delta: float) -> void:
 	_fill(bullet_mm, game.bullet_buffer(BULLET_CAP))
 	_fill(spark_mm, game.spark_buffer(SPARK_CAP))
 	if _flag("--counts") and Engine.get_process_frames() % 60 == 0:
-		print("sparks %d bullets %d slow %.2f meter %.2f t %.1f" % [spark_mm.visible_instance_count, bullet_mm.visible_instance_count, d.slow_amount, d.slow_meter, clock])
+		print("t %.1f sparks %d zone %d section %s towers %d gate %s phase %d score %d" % [clock, spark_mm.visible_instance_count,
+			d.zone, d.section_name, d.towers_left, d.gate_open, d.phase, d.score])
 	_fill(pickup_mm, game.pickup_buffer(PICKUP_CAP))
 	_fill(ring_mm, game.ring_buffer(RING_CAP))
 
@@ -417,18 +551,40 @@ func _draw_world(delta: float) -> void:
 		ship_mat.set_shader_parameter("base_color", Color(1.0, 0.95, 0.8).lerp(chord, 0.35))
 		ship_mat.set_shader_parameter("kick", d.kick)
 
-	# The frame pumps with the kick and turns blue in slow motion.
+	# Edges and walls pump with the kick and turn blue in slow motion.
 	var slow_a: float = d.slow_amount if playing else 0.0
-	var accent: Color = d.accent if playing else hud.songs[selected].accent
-	frame_mat.set_shader_parameter("base_color", Color(accent.lerp(Color(0.55, 0.75, 1.0), slow_a), 0.55 + 0.35 * float(d.kick) + 0.3 * slow_a))
-	frame_mat.set_shader_parameter("kick", d.kick)
+	for i in edge_mats.size():
+		edge_mats[i].set_shader_parameter("base_color", edge_colors[i].lerp(Color(0.55, 0.75, 1.0), slow_a))
+		edge_mats[i].set_shader_parameter("kick", d.kick)
 
-	# Camera: follows the ship part of the way; in slow motion all the way,
-	# closing in from 100 to 150% over the slow motion, logarithmically.
-	var ship_at := game.ship_position() if playing else Vector3.ZERO
-	ship_at.y = 0.0
+	# Towers: flash when hit, flicker when nearly down, sink when they fall.
+	for i in tower_nodes.size():
+		var t: Dictionary = d.towers[i]
+		var node := tower_nodes[i]
+		node.visible = float(t.fall) < 1.0
+		node.position = t.pos - Vector3(0, float(t.fall) * (TOWER_HEIGHT + 1.0), 0)
+		node.rotation.y += delta * (0.4 + 1.6 * (1.0 - float(t.health)))
+		var c: Color = t.color
+		var weak := float(t.health) < 0.25 and fmod(clock * 9.0, 1.0) < 0.3
+		tower_mats[i].set_shader_parameter("base_color", c.lerp(Color.WHITE, float(t.flash) * 0.6) * (0.4 if weak else 1.0))
+		tower_mats[i].set_shader_parameter("kick", d.kick)
+
+	# The gate: small and dim where it will open; open, big, bright and turning.
+	var g: Dictionary = d.gate
+	var open: bool = g.open
+	var grow: float = clamp(float(g.time) * 1.5, 0.0, 1.0) if open else 0.0
+	gate_node.position = g.pos + Vector3(0, 0.4 + 0.9 * grow, 0)
+	gate_node.scale = Vector3.ONE * lerp(0.35, 1.2, grow)
+	gate_node.rotation.y += delta * (0.3 + 1.2 * grow)
+	var gate_color: Color = Color(0.5, 0.5, 0.6).lerp(d.accent, grow)
+	gate_mat.set_shader_parameter("base_color", Color(gate_color, 0.35 + 0.65 * grow))
+	gate_mat.set_shader_parameter("kick", d.kick)
+
+	# Camera: follows the ship; in slow motion it closes in from 100 to 150%
+	# over the slow motion, logarithmically.
+	var want := game.ship_position() if playing else game.start_position()
+	want.y = 0.0
 	var zoom := pow(1.5, float(d.slow_progress) * slow_a)
-	var want := (ship_at * FOLLOW).lerp(ship_at, slow_a)
 	cam_target = cam_target.lerp(want, 1.0 - exp(-delta * 5.0))
 	var back := Vector3(0.0, sin(PITCH), cos(PITCH))
 	var shake: Vector2 = d.shake if playing else Vector2.ZERO

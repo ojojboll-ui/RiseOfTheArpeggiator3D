@@ -89,6 +89,14 @@ namespace
                 if (at (60.7))  c->post ({ Command::slow, 0 });
                 if (at (70.0))  c->post ({ Command::bomb });
 
+                // The 3D game's level (2026-10-19): into the chorus, a tower
+                // falls, into the bridge, the gate opens, back to the verse.
+                if (at (112.0)) c->requestedSection = 1;
+                if (at (114.0)) c->post ({ Command::tower, 2, 0, 0.3f });
+                if (at (117.0)) c->requestedSection = 2;
+                if (at (120.0)) c->post ({ Command::tower, 0, 1, 0.5f });
+                if (at (122.0)) c->requestedSection = 0;
+
                 nextInput += 256;
             }
 
@@ -324,7 +332,7 @@ int main (int argc, char** argv)
         }
 
         // Events -------------------------------------------------------------
-        int shots = 0, layerUps = 0, layerDowns = 0, drops = 0, chords = 0, maxLayer = 0;
+        int shots = 0, layerUps = 0, layerDowns = 0, drops = 0, chords = 0, maxLayer = 0, sections = 0;
         for (const auto& e : a.events)
         {
             switch (e.type)
@@ -334,11 +342,13 @@ int main (int argc, char** argv)
                 case Event::layerDown: ++layerDowns; break;
                 case Event::dropEnd:   ++drops; break;
                 case Event::chord:     ++chords; break;
+                case Event::section:   ++sections; break;
                 default: break;
             }
         }
-        std::printf ("  shots %d  chord changes %d  layer ups %d (max %d)  downs %d  drop ends %d\n",
-                     shots, chords, layerUps, maxLayer, layerDowns, drops);
+        std::printf ("  shots %d  chord changes %d  layer ups %d (max %d)  downs %d  drop ends %d  sections %d\n",
+                     shots, chords, layerUps, maxLayer, layerDowns, drops, sections);
+        if (sections != 3)        fail ("the three section changes did not all arrive");
 
         if (maxLayer < np::audio::maxLayer (sg)) fail ("never reached the top layer");
         if (layerDowns != 1)      fail ("death should strip exactly one layer");

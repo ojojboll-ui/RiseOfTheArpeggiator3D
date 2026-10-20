@@ -8,7 +8,8 @@ extends Control
 enum Mode { MENU, GAME }
 
 var mode := Mode.MENU
-var data := {}             # ArpGame.hud() for the frame
+var data := {}             # ArpGame.hud() for the frame, with towers and gate
+var rooms := []            # ArpGame.level_rooms(), for the map
 var camera: Camera3D
 var paused := false
 var attract := false
@@ -107,12 +108,24 @@ func _draw_game() -> void:
 		draw_rect(Rect2(x0 + 5, y0 + 5, (x1 - x0 - 10) * meter, y1 - y0 - 10), Color(SLOW_COLOR, a))
 	text("SLOW MOTION", Vector2(x0, 10), 16, Color(SLOW_COLOR, max(a, 0.55)))
 
-	# Song, difficulty and progress.
-	text("%s  ·  %s" % [data.song, data.difficulty], Vector2(W * 0.5, 14), 30, accent, 0.5)
-	var bx0 := W * 0.5 - 260.0
-	var bx1 := W * 0.5 + 260.0
-	draw_line(Vector2(bx0, 62), Vector2(bx1, 62), Color(accent, 0.25), 3.0)
-	glow_line(Vector2(bx0, 62), Vector2(lerp(bx0, bx1, float(data.progress)), 62), accent, 4.0)
+	# Song, difficulty, and the three towers in their colours: struck out
+	# when down, the gate when they all are.
+	text("%s  ·  %s" % [data.song, data.difficulty], Vector2(W * 0.5, 12), 30, accent, 0.5)
+	for i in data.towers.size():
+		var tw: Dictionary = data.towers[i]
+		var c: Color = tw.color
+		var x: float = W * 0.5 + (i - 1) * 54.0
+		var pts := PackedVector2Array([Vector2(x - 11, 74), Vector2(x - 6, 52), Vector2(x + 6, 52), Vector2(x + 11, 74)])
+		if tw.alive:
+			glow_poly(pts, c, 2.5)
+			draw_rect(Rect2(x - 9, 78, 18.0 * float(tw.health), 4), c)
+		else:
+			glow_poly(pts, Color(c, 0.3), 1.5)
+			draw_line(Vector2(x - 14, 76), Vector2(x + 14, 50), Color(c, 0.7), 2.5, true)
+	if data.gate_open:
+		text("GATE OPEN", Vector2(W * 0.5, 88), 20, Color(accent, 0.6 + 0.4 * sin(clock * 6.0)), 0.5, false)
+
+	_draw_map(Vector2(W - 270.0, 80.0), 230.0)
 
 	# Lives and bombs.
 	for i in data.lives:
@@ -122,6 +135,8 @@ func _draw_game() -> void:
 		glow_circle(Vector2(W - 420.0 + 34.0 * i, 40.0), 11.0, data.bomb_color, 3.0)
 
 	_draw_wheel(Vector2(160.0, H - 170.0))
+	var zc: Color = data.zone_colors[data.section]
+	text(data.section_name, Vector2(160.0, H - 300.0), 24, zc, 0.5)
 	_draw_layers(Vector2(W - 300.0, H - 40.0))
 
 	# Popups: score numbers where things died.
@@ -138,9 +153,12 @@ func _draw_game() -> void:
 		text(data.banner, Vector2(W * 0.5, H * 0.36), 68, Color(data.banner_color, clamp(life * 1.5, 0.0, 1.0)), 0.5)
 
 	var phase: int = data.phase
-	if phase == 2 or phase == 3:
+	if phase == 2 or (phase == 3 and data.finished):
 		text("SCORE %d" % data.score, Vector2(W * 0.5, H * 0.36 + 100.0), 42, WHITE, 0.5)
 		text("PRESS A" if has_pad else "PRESS ENTER", Vector2(W * 0.5, H * 0.36 + 170.0), 26, Color(1, 1, 1, 0.5 + 0.5 * sin(clock * 4.0)), 0.5)
+	elif phase == 3:
+		text("SCORE %d" % data.score, Vector2(W * 0.5, H * 0.36 + 100.0), 42, WHITE, 0.5)
+		text("NEXT  ·  " + String(songs[min(int(data.level) + 1, 2)].name), Vector2(W * 0.5, H * 0.36 + 170.0), 28, Color(songs[min(int(data.level) + 1, 2)].accent, 0.9), 0.5)
 
 	if paused:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.45))
@@ -149,6 +167,37 @@ func _draw_game() -> void:
 
 	if attract:
 		text("ATTRACT MODE  ·  PRESS A", Vector2(W * 0.5, H - 70.0), 24, Color(1, 1, 1, 0.5 + 0.5 * sin(clock * 3.0)), 0.5)
+
+
+## A map of the level: rooms in their colours, towers, the gate, the ship.
+func _draw_map(at: Vector2, width: float) -> void:
+	var map: Vector2 = data.map_size
+	if map.x <= 0.0:
+		return
+	var s := width / map.x
+	draw_rect(Rect2(at - Vector2(8, 8), map * s + Vector2(16, 16)), Color(0, 0, 0, 0.45))
+	for r in rooms:
+		var rect: Rect2 = r.rect
+		var box := Rect2(at + rect.position * s, rect.size * s)
+		var c: Color = r.color
+		var here: bool = r.zone == data.zone
+		draw_rect(box, Color(c, 0.22 if here else 0.10))
+		draw_rect(box, Color(c, 0.85 if here else 0.45), false, 2.0 if here else 1.2)
+	for tw in data.towers:
+		var p: Vector3 = tw.pos
+		var c: Color = tw.color
+		var q := at + Vector2(p.x, p.z) * s
+		if tw.alive:
+			draw_circle(q, 5.0, c)
+		else:
+			draw_arc(q, 5.0, 0, TAU, 12, Color(c, 0.5), 1.5, true)
+	var g: Dictionary = data.gate
+	var gp: Vector3 = g.pos
+	var gq := at + Vector2(gp.x, gp.z) * s
+	if g.open:
+		draw_arc(gq, 7.0 + 2.0 * sin(clock * 6.0), 0, TAU, 16, data.accent, 2.5, true)
+	var sp: Vector2 = data.ship_map
+	draw_circle(at + sp * s, 4.0, WHITE)
 
 
 func _canvas_scale() -> Vector2:
@@ -215,7 +264,7 @@ func _draw_menu() -> void:
 	text("RISE OF THE", Vector2(W * 0.5, 60), 54, accent, 0.5)
 	text("ARPEGGIATOR", Vector2(W * 0.5, 120), 130, accent, 0.5)
 	text("ARPEGGIATOR", Vector2(W * 0.5, 120), 130, Color(1, 1, 1, 0.25 + 0.2 * pulse), 0.5, false)
-	text("FOUR CHORDS  ·  ONE ARPEGGIO  ·  SURVIVE THE SONG", Vector2(W * 0.5, 300), 26, Color(1, 1, 1, 0.75), 0.5)
+	text("FOUR CHORDS  ·  ONE ARPEGGIO  ·  THREE TOWERS  ·  ONE GATE", Vector2(W * 0.5, 300), 26, Color(1, 1, 1, 0.75), 0.5)
 
 	for i in 3:
 		var s: Dictionary = songs[i]

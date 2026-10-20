@@ -16,8 +16,7 @@ namespace
 {
     using np::Vec2;
 
-    constexpr float kScale = 0.01f;     // one unit of the 2D field is a centimetre
-    const Vec2 kMid { (np::kFieldL + np::kFieldR) * 0.5f, (np::kFieldT + np::kFieldB) * 0.5f };
+    constexpr float kScale = 0.01f;     // one unit of the level is a centimetre; its top-left corner is Godot's origin
 
     // How high things ride above the floor, in field units.
     // Models are drawn this much bigger than the 2D game's outlines: seen
@@ -106,6 +105,19 @@ void ArpGame::start (int level, int difficulty, bool autopilotIn)
     died = bombed = false;
     lastAngle = world->shipState().angle;
     bank = 0.0f;
+}
+
+bool ArpGame::next_level()
+{
+    if (! world || world->phase() != np::World::Phase::cleared || world->levelIndex() >= 2) return false;
+    const auto carry = world->carry();
+    const int level = world->levelIndex() + 1, difficulty = world->difficultyIndex();
+    world = std::make_unique<np::World> (band->conductor, (std::uint32_t) Time::get_singleton()->get_ticks_usec());
+    world->start (level, difficulty, &carry);
+    died = bombed = false;
+    lastAngle = world->shipState().angle;
+    bank = 0.0f;
+    return true;
 }
 
 void ArpGame::set_pilot_flags (bool reckless, bool slowTest)
@@ -235,10 +247,11 @@ Dictionary ArpGame::hud() const
 
     PackedStringArray chords;
     Array colors;
+    const auto wheel = np::audio::sectionWheel (song, cond.pubSection.load());
     for (int s = 0; s < 4; ++s)
     {
         char name[8];
-        np::audio::chordName (song, s, name, sizeof (name));
+        np::audio::chordName (song, wheel, s, name, sizeof (name));
         chords.push_back (name);
         colors.push_back (toColor (np::World::chordColor (s)));
     }
@@ -257,6 +270,21 @@ Dictionary ArpGame::hud() const
         popups.push_back (one);
     }
     d["popups"] = popups;
+
+    // The level: the section the ship is in, the towers, the gate.
+    const int section = cond.pubSection.load();
+    d["section"] = section;
+    d["section_name"] = String (np::audio::sectionName (section));
+    d["zone"] = w->zone();
+    d["towers_left"] = w->towersLeft();
+    d["gate_open"] = w->gateState().open;
+    d["finished"] = w->finished();
+    d["last_level"] = level >= 2;
+    Array zones;
+    for (int z = 0; z < 3; ++z) zones.push_back (toColor (np::zoneColor (level, z)));
+    d["zone_colors"] = zones;
+    d["map_size"] = field_size();
+    d["ship_map"] = Vector2 (w->shipPos().x * kScale, w->shipPos().y * kScale);
     return d;
 }
 
@@ -292,8 +320,8 @@ PackedStringArray ArpGame::difficulty_names() const
 
 Vector3 ArpGame::place (Vec2 p, float height) const
 {
-    const float floor = view()->floor().heightAt (p);
-    return Vector3 ((p.x - kMid.x) * kScale, (floor + height) * kScale, (p.y - kMid.y) * kScale);
+    const float ground = view()->heightAt (p);
+    return Vector3 (p.x * kScale, (ground + height) * kScale, p.y * kScale);
 }
 
 Vector3 ArpGame::to_3d (Vector2 p) const
@@ -303,12 +331,12 @@ Vector3 ArpGame::to_3d (Vector2 p) const
 
 Vector2 ArpGame::from_3d (Vector3 p) const
 {
-    return Vector2 ((float) p.x / kScale + kMid.x, (float) p.z / kScale + kMid.y);
+    return Vector2 ((float) p.x / kScale, (float) p.z / kScale);
 }
 
 float ArpGame::floor_height (Vector3 at) const
 {
-    return view()->floor().heightAt ({ (float) at.x / kScale + kMid.x, (float) at.z / kScale + kMid.y }) * kScale;
+    return view()->heightAt ({ (float) at.x / kScale, (float) at.z / kScale }) * kScale;
 }
 
 PackedFloat32Array ArpGame::enemy_buffer (int kind, int capacity) const
@@ -325,7 +353,7 @@ PackedFloat32Array ArpGame::enemy_buffer (int kind, int capacity) const
         if (e.spawn > 0.0f)
         {
             // Spawning in: comes down from large, flickering — visible, harmless.
-            scale = 1.0f + e.spawn * 2.2f;
+            scale = 1.0f + e.spawn * 1.2f;
             alpha = std::fmod (e.spawn * 14.0f, 1.0f) > 0.4f ? 0.75f : 0.25f;
         }
         if (e.kind == np::EnemyKind::seeker) scale *= 1.0f + 0.18f * kick;
@@ -453,7 +481,120 @@ int ArpGame::floor_rows() const { return view()->floor().rowCount(); }
 
 Vector2 ArpGame::field_size() const
 {
-    return Vector2 ((np::kFieldR - np::kFieldL) * kScale, (np::kFieldB - np::kFieldT) * kScale);
+    return Vector2 (view()->ground().width() * kScale, view()->ground().height() * kScale);
+}
+
+PackedByteArray ArpGame::hill_bytes() const
+{
+    const auto& h = view()->ground().hillHeights();
+    PackedByteArray out;
+    out.resize ((int64_t) (h.size() * sizeof (float)));
+    float* w = reinterpret_cast<float*> (out.ptrw());
+    for (size_t i = 0; i < h.size(); ++i) w[i] = h[i] * kScale;
+    return out;
+}
+
+int ArpGame::hill_columns() const { return view()->ground().hillColumns(); }
+int ArpGame::hill_rows() const { return view()->ground().hillRows(); }
+float ArpGame::hill_cell() const { return np::Level::kHillCell * kScale; }
+
+PackedByteArray ArpGame::floor_info_bytes() const
+{
+    const np::World* w = view();
+    std::array<np::Color, 3> zones;
+    for (int z = 0; z < 3; ++z) zones[(size_t) z] = np::zoneColor (w->levelIndex(), z);
+    const auto info = w->ground().floorInfo (zones);
+    PackedByteArray out;
+    out.resize ((int64_t) info.size());
+    std::memcpy (out.ptrw(), info.data(), info.size());
+    return out;
+}
+
+int ArpGame::info_columns() const { return view()->ground().columns(); }
+int ArpGame::info_rows() const { return view()->ground().rowCount(); }
+
+PackedFloat32Array ArpGame::level_rim() const
+{
+    PackedFloat32Array out;
+    for (const auto& s : view()->ground().rim())
+        for (float v : { s.a.x * kScale, s.a.y * kScale, s.b.x * kScale, s.b.y * kScale, s.outward.x, s.outward.y })
+            out.push_back (v);
+    return out;
+}
+
+PackedFloat32Array ArpGame::level_walls() const
+{
+    const auto& g = view()->ground();
+    PackedFloat32Array out;
+    for (const auto& r : g.walls())
+    {
+        // The highest ground under the wall, so it stands clear of any hill.
+        float top = 0.0f;
+        for (float u = 0.0f; u <= 1.0f; u += 0.125f)
+            for (float v = 0.0f; v <= 1.0f; v += 0.125f)
+                top = std::max (top, g.terrain (r.at (u, v)));
+        for (float v : { r.x0 * kScale, r.y0 * kScale, r.x1 * kScale, r.y1 * kScale, top * kScale })
+            out.push_back (v);
+    }
+    return out;
+}
+
+Array ArpGame::level_rooms() const
+{
+    const np::World* w = view();
+    Array out;
+    for (const auto& r : w->ground().rooms())
+    {
+        Dictionary d;
+        d["rect"] = Rect2 (r.r.x0 * kScale, r.r.y0 * kScale, r.r.width() * kScale, r.r.height() * kScale);
+        d["zone"] = r.zone;
+        d["color"] = toColor (np::zoneColor (w->levelIndex(), r.zone));
+        out.push_back (d);
+    }
+    for (const auto& p : w->ground().passages())
+    {
+        Dictionary d;
+        d["rect"] = Rect2 (p.x0 * kScale, p.y0 * kScale, p.width() * kScale, p.height() * kScale);
+        d["zone"] = -1;
+        d["color"] = Color (0.6f, 0.6f, 0.7f);
+        out.push_back (d);
+    }
+    return out;
+}
+
+Array ArpGame::tower_states() const
+{
+    const np::World* w = view();
+    Array out;
+    for (const auto& t : w->towerList())
+    {
+        Dictionary d;
+        d["pos"] = place (t.pos, 0.0f);
+        d["zone"] = t.zone;
+        d["health"] = std::clamp (t.hp / t.maxHp, 0.0f, 1.0f);
+        d["alive"] = t.alive;
+        d["flash"] = t.flash;
+        d["fall"] = t.fall;
+        d["radius"] = t.radius * kScale;
+        d["color"] = toColor (np::zoneColor (w->levelIndex(), t.zone));
+        out.push_back (d);
+    }
+    return out;
+}
+
+Dictionary ArpGame::gate_state() const
+{
+    const auto& g = view()->gateState();
+    Dictionary d;
+    d["pos"] = place (g.pos, 0.0f);
+    d["open"] = g.open;
+    d["time"] = g.openTime;
+    return d;
+}
+
+Vector3 ArpGame::start_position() const
+{
+    return place (view()->ground().start(), 0.0f);
 }
 
 //==============================================================================
@@ -499,6 +640,20 @@ void ArpGame::_bind_methods()
 {
     ClassDB::bind_method (D_METHOD ("get_stream"), &ArpGame::get_stream);
     ClassDB::bind_method (D_METHOD ("start", "level", "difficulty", "autopilot"), &ArpGame::start);
+    ClassDB::bind_method (D_METHOD ("next_level"), &ArpGame::next_level);
+    ClassDB::bind_method (D_METHOD ("hill_bytes"), &ArpGame::hill_bytes);
+    ClassDB::bind_method (D_METHOD ("hill_columns"), &ArpGame::hill_columns);
+    ClassDB::bind_method (D_METHOD ("hill_rows"), &ArpGame::hill_rows);
+    ClassDB::bind_method (D_METHOD ("hill_cell"), &ArpGame::hill_cell);
+    ClassDB::bind_method (D_METHOD ("floor_info_bytes"), &ArpGame::floor_info_bytes);
+    ClassDB::bind_method (D_METHOD ("info_columns"), &ArpGame::info_columns);
+    ClassDB::bind_method (D_METHOD ("info_rows"), &ArpGame::info_rows);
+    ClassDB::bind_method (D_METHOD ("level_rim"), &ArpGame::level_rim);
+    ClassDB::bind_method (D_METHOD ("level_walls"), &ArpGame::level_walls);
+    ClassDB::bind_method (D_METHOD ("level_rooms"), &ArpGame::level_rooms);
+    ClassDB::bind_method (D_METHOD ("tower_states"), &ArpGame::tower_states);
+    ClassDB::bind_method (D_METHOD ("gate_state"), &ArpGame::gate_state);
+    ClassDB::bind_method (D_METHOD ("start_position"), &ArpGame::start_position);
     ClassDB::bind_method (D_METHOD ("stop"), &ArpGame::stop);
     ClassDB::bind_method (D_METHOD ("pause_band"), &ArpGame::pause_band);
     ClassDB::bind_method (D_METHOD ("resume_band"), &ArpGame::resume_band);

@@ -22,6 +22,17 @@ namespace np
         return accents[std::clamp (level, 0, 2)];
     }
 
+    /** Verse, chorus, bridge: the level's own colour for the verse, and two
+        that stand well apart from it for the others. */
+    Color zoneColor (int level, int zone)
+    {
+        static const Color c[3][3] {
+            { { 0.22f, 0.36f, 1.0f }, { 1.0f, 0.28f, 0.80f }, { 1.0f, 0.68f, 0.15f } },     // PULSE: blue, magenta, amber
+            { { 0.50f, 1.0f, 0.18f }, { 0.20f, 0.85f, 1.0f }, { 1.0f, 0.30f, 0.55f } },     // ACID: lime, cyan, pink
+            { { 0.85f, 0.25f, 1.0f }, { 1.0f, 0.80f, 0.25f }, { 0.20f, 1.0f, 0.75f } } };   // STARFALL: violet, gold, teal
+        return c[std::clamp (level, 0, 2)][std::clamp (zone, 0, 2)];
+    }
+
     /** One colour per wheel slot, so the harmony can be seen: the ship's
         exhaust, the bullets and the bursts all wear the chord they belong to. */
     Color World::chordColor (int slot)
@@ -50,6 +61,9 @@ namespace np
     namespace
     {
         constexpr float kSparkGravity = 1800.0f;
+        constexpr float kSlopePull = 520.0f;      // how hard hills roll enemies down, units/s² per unit of slope
+        constexpr float kTowerHp = 160.0f;        // hits: about fifteen seconds of the arpeggio at 1/8
+        constexpr float kBombRadius = 1700.0f;    // about a screen: the level is bigger than one now
 
         // How big a chord each kind lets out: 0 bright and short, 2 dark and long.
         int chordSize (EnemyKind k)
@@ -61,49 +75,84 @@ namespace np
                 default:                                         return 1;
             }
         }
-
-        Vec2 clampToField (Vec2 p, float margin)
-        {
-            return { std::clamp (p.x, kFieldL + margin, kFieldR - margin),
-                     std::clamp (p.y, kFieldT + margin, kFieldB - margin) };
-        }
-
-        const Vec2 kCentre { (kFieldL + kFieldR) * 0.5f, (kFieldT + kFieldB) * 0.5f };
     }
 
     //==========================================================================
 
-    void World::start (int levelIn, int difficultyIn)
+    World::World (audio::Conductor& bandIn, std::uint32_t seed) : band (bandIn)
+    {
+        rng.s = seed | 1u;
+        lvl.build (0);
+        grid.build (0.0f, 0.0f, lvl.width(), lvl.height(), 40.0f);
+        grid.holdWhere ([this] (Vec2 p) { return lvl.solid (p); });
+        ship.pos = lvl.start();
+    }
+
+    void World::start (int levelIn, int difficultyIn, const Carry* carryIn)
     {
         diff = std::clamp (difficultyIn, 0, 2);
         level = std::clamp (levelIn, 0, 2);
         state = Phase::playing;
 
-        grid.build (kFieldL, kFieldT, kFieldR, kFieldB, 40.0f);
+        lvl.build (level);
+        grid.build (0.0f, 0.0f, lvl.width(), lvl.height(), 40.0f);
+        grid.holdWhere ([this] (Vec2 p) { return lvl.solid (p); });
+        chase = {};
+        chaseTimer = 0.0f;
 
         ship = {};
-        ship.pos = kCentre;
+        ship.pos = lvl.start();
         ship.invulnerable = 1.5f;
+
+        for (int z = 0; z < 3; ++z)
+        {
+            auto& t = towers[(size_t) z];
+            t = {};
+            t.pos = lvl.tower (z);
+            t.zone = z;
+            t.hp = t.maxHp = kTowerHp;
+        }
+        gate = {};
+        gate.pos = lvl.gate();
+        shipZone = lastWaveZone = 0;
 
         enemies.clear(); incoming.clear(); bullets.clear(); particles.clear();
         pickups.clear(); popups.clear(); rings.clear();
         enemies.reserve (256); bullets.reserve (512); particles.reserve (8192);
 
-        points = 0; lives = difficulty (diff).lives; bombs = difficulty (diff).bombs; multiplier = 1; killsSinceDeath = 0;
-        nextLifeAt = kLifeEvery; nextBombAt = kBombEvery;
+        points = 0; lives = difficulty (diff).lives; bombs = difficulty (diff).bombs;
+        if (carryIn != nullptr) { points = carryIn->score; lives = carryIn->lives; bombs = carryIn->bombs; }
+        multiplier = 1; killsSinceDeath = 0;
+        nextLifeAt = (points / kLifeEvery + 1) * kLifeEvery;
+        nextBombAt = (points / kBombEvery + 1) * kBombEvery;
         wheelSlot = audio::song (level).homeSlot;
         deadTime = time = clearedTime = 0.0f;
         lastKicks = band.pubKicks.load();
         lastHalfBars = 0;
         slowMeter = 1.0f; timeScale = 1.0f; slowActive = false; slowProgress = 0.0f;
         kickPulse = chordFlash = flashAmount = shakeAmount = 0.0f;
-        banner = audio::song (level).name; bannerLife = 2.5f; bannerColor = levelAccent (level);
+        say (audio::song (level).name, 2.5f, levelAccent (level));
 
         band.requestedChord = wheelSlot;   // the song starts on its tonic
+        band.requestedSection = 0;         // in the verse
+        band.endless = true;               // the level ends at its gate, not with the song
         band.firing = false;
-        // A fresh arpeggio direction at every start, for songs that draw one;
-        // the seed is the World's, given by whoever made it.
+        // A fresh arpeggio direction at every start, for songs that draw one.
         band.post ({ Command::start, level, (int) (rng.next() % 4u) });
+    }
+
+    void World::say (const std::string& text, float life, Color color)
+    {
+        banner = text;
+        bannerLife = life;
+        bannerColor = color;
+    }
+
+    int World::towersLeft() const
+    {
+        int n = 0;
+        for (const auto& t : towers) if (t.alive) ++n;
+        return n;
     }
 
     //==========================================================================
@@ -119,23 +168,33 @@ namespace np
                 break;
 
             case Event::bar:
-                if (state == Phase::playing) spawnWave (e.a, false);
+                if (state == Phase::playing)
+                {
+                    spawnWave (e.a, false);
+                    // A tower sends out enemies every other bar while the ship is in its room.
+                    if (e.a % 2 == 0 && ship.alive)
+                        for (auto& t : towers)
+                            if (t.alive && t.zone == shipZone) towerBurst (t);
+                }
                 break;
 
             case Event::chord:
                 chordFlash = 1.0f;
                 break;
 
+            case Event::section:
+                say (audio::sectionName (e.a), 1.6f, zoneColor (level, e.a));
+                chordFlash = 1.0f;
+                break;
+
             case Event::layerUp:
-                banner = std::string ("+ ") + audio::layerName (audio::song (level), e.a);
-                bannerLife = 2.2f; bannerColor = levelAccent (level);
+                say (std::string ("+ ") + audio::layerName (audio::song (level), e.a), 2.2f, levelAccent (level));
                 flashAmount = std::max (flashAmount, 0.35f);
                 grid.push (ship.pos, 900.0f, 700.0f);
                 break;
 
             case Event::layerDown:
-                banner = std::string ("- ") + audio::layerName (audio::song (level), e.a + 1);
-                bannerLife = 2.2f; bannerColor = { 1.0f, 0.25f, 0.2f };
+                say (std::string ("- ") + audio::layerName (audio::song (level), e.a + 1), 2.2f, { 1.0f, 0.25f, 0.2f });
                 break;
 
             case Event::dropEnd:
@@ -143,17 +202,6 @@ namespace np
                 break;
 
             case Event::songEnd:
-                if (state == Phase::playing || state == Phase::dead)
-                {
-                    state = Phase::cleared;
-                    clearedTime = 0.0f;
-                    for (auto& en : enemies) if (en.alive) kill (en, 0, false, false);
-                    const int bonus = lives * 5000 + bombs * 2000;
-                    points += bonus;
-                    banner = "LEVEL CLEAR"; bannerLife = 1.0e9f; bannerColor = levelAccent (level);
-                    for (int i = 0; i < 6; ++i)
-                        explode (kCentre + rng.inDisc (500.0f), chordColor (i), levelAccent (level), 140, 900.0f, 2.0f);
-                }
                 break;
         }
     }
@@ -194,10 +242,8 @@ namespace np
 
         if (state == Phase::playing)
         {
-            // The ship slows with the world, but less than the enemies do; its
-            // shots keep their speed (2026-10-10).
-            const float slowAmount = std::clamp ((1.0f - timeScale) / (1.0f - kSlowSpeed), 0.0f, 1.0f);
-            updateShip (dt * (1.0f - (1.0f - kSlowShipSpeed) * slowAmount), in);
+            const float slowA = std::clamp ((1.0f - timeScale) / (1.0f - kSlowSpeed), 0.0f, 1.0f);
+            updateShip (dt * (1.0f - (1.0f - kSlowShipSpeed) * slowA), in);
 
             if (in.bomb) detonateBomb();
 
@@ -222,8 +268,7 @@ namespace np
         dt *= timeScale;
 
         // The band's slow filter: a noticeable but gentle dip as slow motion
-        // starts (30% of the way, about 6 kHz), then down with the zoom on the
-        // same logarithmic course, sent whenever it has moved (2026-10-14).
+        // starts, then down with the zoom on the same logarithmic course.
         {
             const float depth = slowAmount() * (kSlowDip + (1.0f - kSlowDip) * slowProgress);
             if (std::abs (depth - sentSlowDepth) > 0.002f || (depth == 0.0f && sentSlowDepth != 0.0f))
@@ -236,14 +281,23 @@ namespace np
         if (state == Phase::dead)
         {
             deadTime += dt;
-            // The band brings the ship back when the music returns; this is
-            // only for when the music cannot (the song ended mid-drop).
-            if (deadTime > 6.0f) respawn();
+            if (deadTime > 6.0f) respawn();   // in case the music cannot bring it back
         }
 
         if (state == Phase::cleared) clearedTime += dt;
 
+        // Way-finding towards the ship, kept fresh as it moves.
+        chaseTimer -= realDt;
+        if (chaseTimer <= 0.0f)
+        {
+            chaseTimer = 0.12f;
+            lvl.updateFlow (chase, ship.alive ? ship.pos : lvl.start());
+        }
+
+        updateZone();
         updateEnemies (dt);
+        updateTowers (dt);
+        updateGate (realDt);
         updateBullets (realDt);   // the shots are the player's, so they keep full speed
         updatePickups (dt);
         collide();
@@ -278,12 +332,15 @@ namespace np
         if (kicks != lastKicks) { lastKicks = kicks; kickPulse = 1.0f; }
         kickPulse *= std::exp (-dt * 7.0f);
 
-        // A slow drift of disturbances so the menu floor is never still.
+        // A slow drift of disturbances round the start, so the menu floor is never still.
         if (rng.chance (dt * 1.4f))
         {
-            const Vec2 p = kCentre + Vec2 { rng.range (-800.0f, 800.0f), rng.range (-420.0f, 420.0f) };
-            grid.push (p, rng.range (300.0f, 700.0f), 220.0f);
-            explode (p, hsv (rng.unit(), 0.7f, 1.0f), hsv (rng.unit(), 0.5f, 1.0f), 40, 500.0f, 1.2f);
+            const Vec2 p = lvl.start() + Vec2 { rng.range (-800.0f, 800.0f), rng.range (-500.0f, 400.0f) };
+            if (! lvl.solid (p))
+            {
+                grid.push (p, rng.range (300.0f, 700.0f), 220.0f);
+                explode (p, hsv (rng.unit(), 0.7f, 1.0f), hsv (rng.unit(), 0.5f, 1.0f), 40, 500.0f, 1.2f);
+            }
         }
 
         updateParticles (dt);
@@ -297,8 +354,7 @@ namespace np
     {
         // The wheel reads the stick only when it is clearly pushed, and keeps
         // the current chord until the stick is well inside a neighbour's
-        // quarter — 12 degrees past the boundary. Dodging back and forth over
-        // a diagonal does not flip the harmony on every beat.
+        // quarter — 12 degrees past the boundary.
         if (move.length() < 0.5f) return;
 
         const float angle = std::atan2 (move.x, -move.y);     // 0 up, clockwise
@@ -314,6 +370,33 @@ namespace np
         band.requestedChord = wheelSlot;
     }
 
+    void World::updateZone()
+    {
+        // The section follows the room the ship is in; in a passage it keeps
+        // the one it came from, so the music turns as the ship arrives.
+        const int z = lvl.zoneAt (ship.pos);
+        if (z >= 0 && z != shipZone && ship.alive)
+        {
+            shipZone = z;
+            band.requestedSection = z;
+        }
+    }
+
+    Vec2 World::keepOut (Vec2 p, float radius, Vec2* normal) const
+    {
+        Vec2 n;
+        Vec2 q = lvl.resolve (p, radius, &n);
+        for (const auto& t : towers)
+        {
+            if (! t.alive) continue;
+            const Vec2 d = q - t.pos;
+            const float dist = d.length(), minD = t.radius + radius;
+            if (dist < minD && dist > 1.0e-3f) { q = t.pos + d / dist * minD; n = d / dist; }
+        }
+        if (normal != nullptr) *normal = n;
+        return q;
+    }
+
     void World::updateShip (float dt, const Controls& in)
     {
         if (! ship.alive) { band.firing = false; return; }
@@ -324,7 +407,11 @@ namespace np
         const float m = std::min (1.0f, move.length());
         if (m > 0.0f) move = move.normalised() * std::pow (m, 1.3f);
 
-        const Vec2 target = move * kShipSpeed;
+        // Hills: a little slower up, a little faster down.
+        const float climb = m > 0.0f ? dot (lvl.slope (ship.pos), move.normalised()) : 0.0f;
+        const float hill = std::clamp (1.0f - climb * 1.2f, 0.75f, 1.25f);
+
+        const Vec2 target = move * (kShipSpeed * hill);
         ship.vel += (target - ship.vel) * std::min (1.0f, dt * 14.0f);
         ship.pos += ship.vel * dt;
 
@@ -337,7 +424,7 @@ namespace np
             if (dist < 420.0f && dist > 1.0f) ship.pos += d / dist * (120.0f * (1.0f - dist / 420.0f) * dt);
         }
 
-        ship.pos = clampToField (ship.pos, 18.0f);
+        ship.pos = keepOut (ship.pos, 18.0f);
 
         if (ship.vel.length() > 40.0f)
         {
@@ -369,8 +456,7 @@ namespace np
         const bool firing = in.fire && in.aim.length() > 0.2f;
         band.firing = firing;
         if (firing) aimDir = in.aim.normalised();
-        // The camera follows the ship, so the arpeggio pans with the aim instead
-        // of the ship's place on the field.
+        // The camera follows the ship, so the arpeggio pans with the aim.
         band.aimPan = 0.5f + 0.2f * aimDir.x;
     }
 
@@ -381,7 +467,7 @@ namespace np
 
         // The arpeggio fans the shots a little: each step of the cycle leaves
         // at its own angle, so a run up the chord is a sweep across the aim.
-        const float fan = ((float) index / 100.0f - 0.5f) * 0.084f;   // index is the place in the arp cycle, 0..100
+        const float fan = ((float) index / 100.0f - 0.5f) * 0.084f;
         const Color c = chordColor (chord);
 
         auto fire = [&] (float angle, Vec2 offset)
@@ -413,6 +499,7 @@ namespace np
         flashP.color = c.withAlpha (accent ? 1.0f : 0.6f);
         flashP.life = flashP.maxLife = 0.08f;
         flashP.width = accent ? 9.0f : 6.0f;
+        flashP.z = 16.0f;
         particles.push_back (flashP);
     }
 
@@ -422,10 +509,11 @@ namespace np
     void World::spawnEnemy (EnemyKind kind, Vec2 pos, float delay)
     {
         if (enemies.size() + incoming.size() >= 220) return;
+        if (lvl.solid (pos)) return;
 
         Enemy e;
         e.kind = kind;
-        e.pos = clampToField (pos, 30.0f);
+        e.pos = keepOut (pos, 30.0f);
         e.spawn = 0.7f + delay;
         e.angle = rng.range (0.0f, kTau);
         e.wander = rng.range (0.0f, kTau);
@@ -447,10 +535,11 @@ namespace np
     {
         for (int tries = 0; tries < 30; ++tries)
         {
-            const Vec2 p { rng.range (kFieldL + 60.0f, kFieldR - 60.0f), rng.range (kFieldT + 60.0f, kFieldB - 60.0f) };
+            const Vec2 p = lvl.randomPoint (shipZone, rng, 50.0f);
             if ((p - ship.pos).length() >= minDist) return p;
         }
-        return { ship.pos.x < kCentre.x ? kFieldR - 80.0f : kFieldL + 80.0f, kCentre.y };
+        const Rect& r = lvl.roomRect (shipZone);
+        return r.at (ship.pos.x < r.centre().x ? 0.85f : 0.15f, 0.5f);
     }
 
     void World::spawnWave (int bar, bool half)
@@ -459,19 +548,22 @@ namespace np
         if (bar < 1 || ! ship.alive) return;
 
         const int layer = band.pubLayer.load();
-        const float intensity = (0.5f * (float) level + 0.35f * (float) layer + (float) bar / 28.0f) * difficulty (diff).spawn;
+        const float intensity = (0.5f * (float) level + 0.35f * (float) layer + (float) std::min (bar, 112) / 28.0f) * difficulty (diff).spawn;
         const int full = std::min ((int) (18.0f * difficulty (diff).spawn), std::max (2, (int) ((3.0f + intensity * 2.2f) * std::sqrt (difficulty (diff).spawn))));
         const int budget = half ? std::max (2, full / 2) : full;
 
         int wells = 0;
         for (const auto& e : enemies) if (e.alive && e.kind == EnemyKind::well) ++wells;
 
+        // Waves come into the room the ship is in (or last was).
+        const Rect room = lvl.roomRect (shipZone);
+
         // What this level's floor can throw. Each level adds a kind.
         struct Option { int kind; float weight; };
         std::vector<Option> options {
             { 0, 1.0f },                                  // wanderers along an edge
             { 1, 1.0f },                                  // seekers from the corners
-            { 2, level >= 0 ? 0.7f : 0.0f },              // dodgers in a cluster
+            { 2, 0.7f },                                  // dodgers in a cluster
             { 3, level >= 1 ? 0.6f : 0.0f },              // splitters
             { 4, ! half && (level >= 2 || (level == 1 && layer >= 3)) && wells < 2 ? 0.25f : 0.0f },   // a well
             { 5, ! half && intensity > 2.5f && bar % 8 == 4 ? 2.0f : 0.0f }                             // a ring round the ship
@@ -491,20 +583,21 @@ namespace np
                 for (int i = 0; i < budget; ++i)
                 {
                     const float t = ((float) i + 0.5f) / (float) budget;
+                    const float in = 60.0f;
                     Vec2 p;
-                    if (edge == 0) p = { lerp (kFieldL, kFieldR, t), kFieldT + 40.0f };
-                    if (edge == 1) p = { kFieldR - 40.0f, lerp (kFieldT, kFieldB, t) };
-                    if (edge == 2) p = { lerp (kFieldL, kFieldR, t), kFieldB - 40.0f };
-                    if (edge == 3) p = { kFieldL + 40.0f, lerp (kFieldT, kFieldB, t) };
-                    spawnEnemy (EnemyKind::wanderer, p, 0.04f * (float) i);
+                    if (edge == 0) p = { lerp (room.x0, room.x1, t), room.y0 + in };
+                    if (edge == 1) p = { room.x1 - in, lerp (room.y0, room.y1, t) };
+                    if (edge == 2) p = { lerp (room.x0, room.x1, t), room.y1 - in };
+                    if (edge == 3) p = { room.x0 + in, lerp (room.y0, room.y1, t) };
+                    if ((p - ship.pos).length() > 250.0f) spawnEnemy (EnemyKind::wanderer, p, 0.04f * (float) i);
                 }
                 break;
             }
 
             case 1:
             {
-                const Vec2 corners[4] { { kFieldL + 60, kFieldT + 60 }, { kFieldR - 60, kFieldT + 60 },
-                                        { kFieldR - 60, kFieldB - 60 }, { kFieldL + 60, kFieldB - 60 } };
+                const Vec2 corners[4] { { room.x0 + 80, room.y0 + 80 }, { room.x1 - 80, room.y0 + 80 },
+                                        { room.x1 - 80, room.y1 - 80 }, { room.x0 + 80, room.y1 - 80 } };
                 const int per = std::max (1, budget / 4);
                 for (const auto& c : corners)
                 {
@@ -523,11 +616,9 @@ namespace np
             }
 
             case 3:
-            {
                 for (int i = 0; i < std::max (1, budget / 3); ++i)
                     spawnEnemy (EnemyKind::splitter, farPoint (450.0f), 0.1f * (float) i);
                 break;
-            }
 
             case 4:
                 spawnEnemy (EnemyKind::well, farPoint (550.0f));
@@ -544,11 +635,36 @@ namespace np
         }
     }
 
+    void World::towerBurst (Tower& t)
+    {
+        // A handful from the tower's foot: seekers, and from the second level
+        // on something heavier now and then.
+        const int n = 2 + std::min (3, band.pubLayer.load() / 2) + (diff == 2 ? 1 : 0);
+        const EnemyKind kind = (level >= 1 && rng.chance (0.3f)) ? EnemyKind::splitter
+                             : (rng.chance (0.35f) ? EnemyKind::dodger : EnemyKind::seeker);
+        for (int i = 0; i < n; ++i)
+            spawnEnemy (kind, t.pos + fromAngle (kTau * (float) i / (float) n + rng.unit(), t.radius + 50.0f), 0.08f * (float) i);
+        rings.push_back ({ t.pos, t.radius, 600.0f, 0.4f, zoneColor (level, t.zone) });
+        grid.push (t.pos, 400.0f, 260.0f);
+    }
+
+    Vec2 World::chaseDirection (Vec2 from) const
+    {
+        const Vec2 target = ship.alive ? ship.pos : lvl.start();
+        const Vec2 d = target - from;
+        const float dist = d.length();
+        if (dist < 1.0f) return {};
+
+        // Straight at it when it can be seen; round the walls when it cannot.
+        if (dist < 900.0f && lvl.lineOfSight (from, target)) return d / dist;
+        const Vec2 f = lvl.flowDirection (chase, from);
+        return f.length() > 0.0f ? f : d / dist;
+    }
+
     void World::updateEnemies (float dt)
     {
         const int layer = band.pubLayer.load();
         const float speedUp = (1.0f + 0.08f * (float) level + 0.03f * (float) layer) * difficulty (diff).speed;
-        const Vec2 target = ship.alive ? ship.pos : kCentre;
 
         for (auto& e : enemies)
         {
@@ -559,8 +675,7 @@ namespace np
 
             if (e.spawn > 0.0f) { e.spawn -= dt; continue; }
 
-            const Vec2 toShip = target - e.pos;
-            const float dist = std::max (1.0f, toShip.length());
+            const Vec2 toward = chaseDirection (e.pos);
 
             switch (e.kind)
             {
@@ -574,7 +689,7 @@ namespace np
 
                 case EnemyKind::seeker:
                 {
-                    const Vec2 want = toShip / dist * (230.0f * speedUp);
+                    const Vec2 want = toward * (230.0f * speedUp);
                     e.vel += (want - e.vel) * std::min (1.0f, dt * 2.5f);
                     e.angle = e.vel.angle();
                     break;
@@ -582,7 +697,7 @@ namespace np
 
                 case EnemyKind::dodger:
                 {
-                    Vec2 want = toShip / dist * (210.0f * speedUp);
+                    Vec2 want = toward * (210.0f * speedUp);
 
                     // Sidestep any bullet heading this way.
                     for (const auto& b : bullets)
@@ -602,7 +717,7 @@ namespace np
 
                 case EnemyKind::splitter:
                 {
-                    const Vec2 want = toShip / dist * (150.0f * speedUp);
+                    const Vec2 want = toward * (150.0f * speedUp);
                     e.vel += (want - e.vel) * std::min (1.0f, dt * 1.6f);
                     break;
                 }
@@ -610,7 +725,7 @@ namespace np
                 case EnemyKind::shard:
                 {
                     // Circle in on the ship rather than straight at it.
-                    const Vec2 want = (toShip / dist + toShip.perp() / dist * 0.8f).normalised() * (300.0f * speedUp);
+                    const Vec2 want = (toward + toward.perp() * 0.8f).normalised() * (300.0f * speedUp);
                     e.vel += (want - e.vel) * std::min (1.0f, dt * 3.0f);
                     break;
                 }
@@ -651,15 +766,24 @@ namespace np
                 }
             }
 
+            // Hills roll everything a little downhill.
+            e.vel -= lvl.slope (e.pos) * (kSlopePull * dt);
+
             e.pos += e.vel * dt;
 
-            // Walls: bounce, and keep inside. The wander heading is only mirrored
-            // while it still points into the wall — mirroring it every frame
-            // against the wall left the pinwheels shivering there.
-            if (e.pos.x < kFieldL + e.radius) { e.pos.x = kFieldL + e.radius; e.vel.x = std::abs (e.vel.x); if (std::cos (e.wander) < 0.0f) e.wander = kPi - e.wander; }
-            if (e.pos.x > kFieldR - e.radius) { e.pos.x = kFieldR - e.radius; e.vel.x = -std::abs (e.vel.x); if (std::cos (e.wander) > 0.0f) e.wander = kPi - e.wander; }
-            if (e.pos.y < kFieldT + e.radius) { e.pos.y = kFieldT + e.radius; e.vel.y = std::abs (e.vel.y); if (std::sin (e.wander) < 0.0f) e.wander = -e.wander; }
-            if (e.pos.y > kFieldB - e.radius) { e.pos.y = kFieldB - e.radius; e.vel.y = -std::abs (e.vel.y); if (std::sin (e.wander) > 0.0f) e.wander = -e.wander; }
+            // Walls and towers: pushed out, bounced off. The wander heading is
+            // only turned while it still points into the wall — turning it every
+            // frame against a wall left the pinwheels shivering there.
+            Vec2 n;
+            e.pos = keepOut (e.pos, e.radius, &n);
+            if (n.lengthSq() > 0.0f)
+            {
+                const float into = dot (e.vel, n);
+                if (into < 0.0f) e.vel -= n * (into * 1.6f);
+                const Vec2 heading = fromAngle (e.wander);
+                const float hIn = dot (heading, n);
+                if (hIn < 0.0f) e.wander = (heading - n * (2.0f * hIn)).angle();
+            }
         }
 
         // Keep the crowd from stacking into one blob: a light shove apart.
@@ -685,6 +809,76 @@ namespace np
     }
 
     //==========================================================================
+    // Towers and the gate
+
+    void World::updateTowers (float dt)
+    {
+        for (auto& t : towers)
+        {
+            t.flash = std::max (0.0f, t.flash - dt * 5.0f);
+            if (! t.alive) t.fall = std::min (1.0f, t.fall + dt * 0.8f);
+        }
+    }
+
+    void World::destroyTower (Tower& t, int chord)
+    {
+        if (! t.alive) return;
+        t.alive = false;
+        t.fall = 0.0f;
+
+        const Color c = zoneColor (level, t.zone);
+        explode (t.pos, c, { 1, 1, 1 }, 420, 1500.0f, 2.2f, 1.1f);
+        explode (t.pos, c, chordColor (chord), 200, 800.0f, 1.6f, 1.6f);
+        grid.push (t.pos, 3000.0f, 700.0f);
+        rings.push_back ({ t.pos, t.radius, 1800.0f, 0.9f, c });
+        rings.push_back ({ t.pos, t.radius, 1100.0f, 1.2f, { 1, 1, 1 } });
+        shakeAmount = std::max (shakeAmount, 20.0f);
+        flashAmount = std::max (flashAmount, 0.7f);
+
+        // What stood round it goes with it, for the score.
+        for (auto& e : enemies)
+            if (e.alive && (e.pos - t.pos).length() < 650.0f) kill (e, chord, true, false);
+
+        addScore (10000, t.pos);
+        band.post ({ Command::tower, chord, 0, panOf (t.pos) });
+
+        const int left = towersLeft();
+        if (left > 0) say (left == 1 ? "TOWER DOWN  ·  1 LEFT" : "TOWER DOWN  ·  2 LEFT", 2.2f, c);
+    }
+
+    void World::updateGate (float dt)
+    {
+        if (! gate.open)
+        {
+            if (state == Phase::playing && towersLeft() == 0)
+            {
+                gate.open = true;
+                gate.openTime = 0.0f;
+                say ("THE GATE IS OPEN", 3.0f, levelAccent (level));
+                rings.push_back ({ gate.pos, 20.0f, 900.0f, 1.0f, levelAccent (level) });
+                band.post ({ Command::tower, band.pubChord.load(), 1, panOf (gate.pos) });
+            }
+            return;
+        }
+
+        gate.openTime += dt;
+        if (state == Phase::playing && ship.alive && gate.openTime > 1.0f && (ship.pos - gate.pos).length() < 80.0f)
+        {
+            state = Phase::cleared;
+            clearedTime = 0.0f;
+            band.firing = false;
+            setSlow (false);
+            for (auto& en : enemies) if (en.alive) kill (en, 0, false, false);
+            points += lives * 5000 + bombs * 2000;
+            band.post ({ Command::finish });
+            say (level >= 2 ? "ALL CLEAR" : "LEVEL CLEAR", 1.0e9f, levelAccent (level));
+            for (int i = 0; i < 6; ++i)
+                explode (gate.pos + rng.inDisc (400.0f), chordColor (i), levelAccent (level), 140, 900.0f, 2.0f, 1.2f);
+            rings.push_back ({ gate.pos, 10.0f, 1600.0f, 1.2f, { 1, 1, 1 } });
+        }
+    }
+
+    //==========================================================================
 
     void World::updateBullets (float dt)
     {
@@ -701,21 +895,23 @@ namespace np
                 if (dist < 300.0f && dist > 1.0f) b.vel += d / dist * (2600.0f * (1.0f - dist / 300.0f) * dt);
             }
 
+            const Vec2 before = b.pos;
             b.pos += b.vel * dt;
             b.life -= dt;
 
-            if (b.pos.x < kFieldL || b.pos.x > kFieldR || b.pos.y < kFieldT || b.pos.y > kFieldB || b.life <= 0.0f)
+            if (lvl.solid (b.pos) || b.life <= 0.0f)
             {
                 b.alive = false;
-                const Vec2 at = clampToField (b.pos, 1.0f);
                 for (int i = 0; i < 4; ++i)
                 {
                     Particle p;
-                    p.pos = at;
+                    p.pos = before;
                     p.vel = rng.inDisc (380.0f) - b.vel.normalised() * 120.0f;
                     p.color = chordColor (b.chord).withAlpha (0.8f);
                     p.life = p.maxLife = rng.range (0.15f, 0.35f);
                     p.width = 2.0f;
+                    p.z = 16.0f;
+                    p.vz = rng.range (0.0f, 200.0f);
                     particles.push_back (p);
                 }
             }
@@ -744,6 +940,7 @@ namespace np
                     p.vel += (d / dist * 2200.0f + d.perp() / dist * 900.0f) * ((1.0f - dist / 300.0f) * dt);
             }
 
+            const Vec2 before = p.pos;
             p.pos += p.vel * dt;
 
             // Up and down: gravity, a bounce off the floor that keeps 40%.
@@ -752,10 +949,14 @@ namespace np
             p.z += p.vz * dt;
             if (p.z < 0.0f) { p.z = -p.z * 0.4f; p.vz = std::abs (p.vz) * 0.4f; }
 
-            if (p.pos.x < kFieldL) { p.pos.x = kFieldL; p.vel.x = std::abs (p.vel.x) * 0.6f; }
-            if (p.pos.x > kFieldR) { p.pos.x = kFieldR; p.vel.x = -std::abs (p.vel.x) * 0.6f; }
-            if (p.pos.y < kFieldT) { p.pos.y = kFieldT; p.vel.y = std::abs (p.vel.y) * 0.6f; }
-            if (p.pos.y > kFieldB) { p.pos.y = kFieldB; p.vel.y = -std::abs (p.vel.y) * 0.6f; }
+            // Walls: bounce off the side that was hit. Above a wall's top a
+            // spark flies over it.
+            if (p.z < Level::kWallHeight && lvl.solid (p.pos))
+            {
+                if (lvl.solid ({ p.pos.x, before.y })) p.vel.x = -p.vel.x * 0.6f;
+                if (lvl.solid ({ before.x, p.pos.y })) p.vel.y = -p.vel.y * 0.6f;
+                p.pos = before;
+            }
         }
 
         particles.erase (std::remove_if (particles.begin(), particles.end(), [] (const Particle& p) { return p.life <= 0.0f; }),
@@ -791,7 +992,7 @@ namespace np
                 }
             }
 
-            p.pos = clampToField (p.pos + p.vel * dt, 20.0f);
+            p.pos = keepOut (p.pos + p.vel * dt, 20.0f);
             if (p.life <= 0.0f) p.alive = false;
         }
     }
@@ -800,10 +1001,47 @@ namespace np
 
     void World::collide()
     {
-        // Bullets into enemies.
         for (auto& b : bullets)
         {
             if (! b.alive) continue;
+
+            // Into a tower: it takes the hit and every quarter of its strength
+            // gone is heard as a chord.
+            for (auto& t : towers)
+            {
+                if (! t.alive) continue;
+                const float r = t.radius + 6.0f;
+                if ((t.pos - b.pos).lengthSq() > r * r) continue;
+
+                b.alive = false;
+                const int quarterBefore = (int) std::ceil (t.hp / t.maxHp * 4.0f);
+                t.hp -= 1.0f;
+                t.flash = 1.0f;
+                const int quarterAfter = (int) std::ceil (t.hp / t.maxHp * 4.0f);
+                for (int i = 0; i < 3; ++i)
+                {
+                    Particle p;
+                    p.pos = b.pos;
+                    p.vel = rng.inDisc (420.0f) - b.vel.normalised() * 200.0f;
+                    p.color = mix (zoneColor (level, t.zone), chordColor (b.chord), rng.unit()).withAlpha (0.9f);
+                    p.life = p.maxLife = rng.range (0.2f, 0.5f);
+                    p.width = 2.2f;
+                    p.z = rng.range (10.0f, 120.0f);
+                    p.vz = rng.range (0.0f, 300.0f);
+                    particles.push_back (p);
+                }
+                grid.push (t.pos, 40.0f, 200.0f);
+                if (t.hp <= 0.0f) destroyTower (t, b.chord);
+                else if (quarterAfter < quarterBefore)
+                {
+                    band.post ({ Command::kill, b.chord, 2, panOf (t.pos), -1, (int) EnemyKind::well });
+                    rings.push_back ({ t.pos, t.radius, 700.0f, 0.5f, zoneColor (level, t.zone) });
+                    shakeAmount = std::max (shakeAmount, 6.0f);
+                }
+                break;
+            }
+            if (! b.alive) continue;
+
             for (auto& e : enemies)
             {
                 if (! e.alive || e.spawn > 0.0f) continue;
@@ -876,7 +1114,7 @@ namespace np
             }
     }
 
-    void World::explode (Vec2 pos, Color a, Color b, int count, float speed, float life)
+    void World::explode (Vec2 pos, Color a, Color b, int count, float speed, float life, float up)
     {
         for (int i = 0; i < count; ++i)
         {
@@ -890,7 +1128,7 @@ namespace np
             p.width = rng.range (1.8f, 3.4f);
             p.drag = rng.range (0.92f, 0.965f);
             p.z = 12.0f;
-            p.vz = s * rng.range (0.1f, 0.75f);
+            p.vz = s * rng.range (0.1f, up);
             particles.push_back (p);
         }
     }
@@ -898,10 +1136,10 @@ namespace np
     void World::addScore (int amount, Vec2 where)
     {
         points += amount;
-        if (amount >= 200) popups.push_back ({ where, std::to_string (amount), 0.8f, { 1, 1, 1 }, 18.0f });
+        if (amount >= 200) popups.push_back ({ where, std::to_string (amount), 0.8f, { 1, 1, 1 }, amount >= 10000 ? 34.0f : 18.0f });
 
-        if (points >= nextLifeAt) { ++lives; nextLifeAt += kLifeEvery; banner = "+1 LIFE"; bannerLife = 1.6f; bannerColor = { 0.4f, 1.0f, 0.5f }; }
-        if (points >= nextBombAt) { ++bombs; nextBombAt += kBombEvery; banner = "+1 BOMB"; bannerLife = 1.6f; bannerColor = kBombColor; }
+        if (points >= nextLifeAt) { ++lives; nextLifeAt += kLifeEvery; say ("+1 LIFE", 1.6f, { 0.4f, 1.0f, 0.5f }); }
+        if (points >= nextBombAt) { ++bombs; nextBombAt += kBombEvery; say ("+1 BOMB", 1.6f, kBombColor); }
     }
 
     void World::shipDies()
@@ -918,7 +1156,7 @@ namespace np
         shakeAmount = 22.0f;
         flashAmount = 0.6f;
 
-        // Everything on the field goes with it, silently and for no score.
+        // Everything on the level goes with it, silently and for no score.
         for (auto& e : enemies) if (e.alive) kill (e, 0, false, false);
         pickups.clear();
 
@@ -929,7 +1167,7 @@ namespace np
         {
             state = Phase::gameOver;
             band.post ({ Command::stop });
-            banner = "GAME OVER"; bannerLife = 1.0e9f; bannerColor = { 1.0f, 0.25f, 0.25f };
+            say ("GAME OVER", 1.0e9f, { 1.0f, 0.25f, 0.25f });
         }
         else
         {
@@ -943,7 +1181,7 @@ namespace np
         if (state != Phase::dead) return;
         state = Phase::playing;
         ship.alive = true;
-        ship.pos = kCentre;
+        ship.pos = keepOut (ship.pos, 30.0f);   // where it died: the level was cleared with it
         ship.vel = {};
         ship.invulnerable = 2.0f;
         rings.push_back ({ ship.pos, 300.0f, -500.0f, 0.55f, chordColor (band.pubChord.load()) });
@@ -955,7 +1193,8 @@ namespace np
         --bombs;
         band.post ({ Command::bomb });
 
-        for (auto& e : enemies) if (e.alive) kill (e, band.pubChord.load(), false, false);
+        for (auto& e : enemies)
+            if (e.alive && (e.pos - ship.pos).length() < kBombRadius) kill (e, band.pubChord.load(), false, false);
         grid.push (ship.pos, 3200.0f, 1400.0f);
         rings.push_back ({ ship.pos, 30.0f, 2200.0f, 0.9f, kBombColor });
         rings.push_back ({ ship.pos, 10.0f, 1600.0f, 1.1f, { 1, 1, 1 } });

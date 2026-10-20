@@ -37,6 +37,9 @@ public:
     Ref<AudioStream> get_stream();
 
     void start (int level, int difficulty, bool autopilot);
+    /** After a level's gate: the next song, with the score, lives and bombs
+        carried over. False after the last. */
+    bool next_level();
     void stop();
     void pause_band();
     void resume_band();
@@ -76,6 +79,21 @@ public:
     int floor_columns() const;
     int floor_rows() const;
     Vector2 field_size() const;
+
+    // The level's ground, for building the scene once per level.
+    PackedByteArray hill_bytes() const;        // RF heights in metres, hill_columns x hill_rows
+    int hill_columns() const;
+    int hill_rows() const;
+    float hill_cell() const;                   // metres between hill points
+    PackedByteArray floor_info_bytes() const;  // RGBA8: zone colour, alpha open floor
+    int info_columns() const;
+    int info_rows() const;
+    PackedFloat32Array level_rim() const;      // per edge: ax, az, bx, bz, outward x, outward z (metres)
+    PackedFloat32Array level_walls() const;    // per wall: x0, z0, x1, z1, highest ground under it (metres)
+    Array level_rooms() const;                 // { rect: Rect2, zone, color }
+    Array tower_states() const;                // { pos, zone, health, alive, flash, fall, color }
+    Dictionary gate_state() const;             // { pos, open, time }
+    Vector3 start_position() const;
     float floor_height (Vector3 at) const;
 
     Vector3 to_3d (Vector2 p) const;

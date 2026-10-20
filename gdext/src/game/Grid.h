@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include "Math.h"
@@ -31,6 +32,17 @@ namespace np
             dy = (bottom - top) / (float) (rows - 1);
             h.assign ((size_t) (cols * rows), 0.0f);
             v.assign ((size_t) (cols * rows), 0.0f);
+            held.assign ((size_t) (cols * rows), 0);
+        }
+
+        /** Holds every point where `solid` says so still: waves stop at walls
+            and the edges of the rooms, and bounce back. */
+        template <typename F>
+        void holdWhere (F&& solid)
+        {
+            for (int r = 0; r < rows; ++r)
+                for (int c = 0; c < cols; ++c)
+                    held[index (c, r)] = solid (Vec2 { x0 + (float) c * dx, y0 + (float) r * dy }) ? 1 : 0;
         }
 
         /** Presses the floor down round a point, falling off with distance. */
@@ -67,6 +79,7 @@ namespace np
 
                 for (size_t i = 0; i < h.size(); ++i)
                 {
+                    if (held[i]) { h[i] = v[i] = 0.0f; continue; }
                     v[i] *= damp;
                     h[i] += v[i] * step;
                 }
@@ -123,6 +136,7 @@ namespace np
         }
 
         std::vector<float> h, v;
+        std::vector<std::uint8_t> held;
         int cols = 0, rows = 0;
         float x0 = 0, y0 = 0, dx = 1, dy = 1;
     };

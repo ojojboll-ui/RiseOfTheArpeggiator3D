@@ -53,7 +53,7 @@ namespace
         const Song& s = song (songIndex);
         auto band = std::make_unique<Conductor>();
         band->prepare (kRate);
-        band->sectionStyle = style;
+        band->styleOverride = (int) style;
         band->endless = true;
         band->requestedSection = 0;
         band->requestedChord = s.homeSlot;

@@ -186,6 +186,74 @@ static func ship(s := 1.4) -> ArrayMesh:
 	return solid(faces)
 
 
+## A zone's tower, in metres: a six-sided column narrowing upward and a
+## crystal floating over it. `radius` is the column's foot.
+static func tower(radius: float, height: float) -> ArrayMesh:
+	var faces := []
+	var top_r := radius * 0.55
+	var top_y := height * 0.78
+	var bottom := PackedVector3Array()
+	var top := PackedVector3Array()
+	for i in 6:
+		var a := TAU * i / 6.0
+		bottom.push_back(Vector3(cos(a) * radius, -0.6, sin(a) * radius))
+		top.push_back(Vector3(cos(a) * top_r, top_y, sin(a) * top_r))
+	faces.push_back(bottom)
+	faces.push_back(top)
+	for i in 6:
+		var j := (i + 1) % 6
+		faces.push_back(quad(bottom[i], bottom[j], top[j], top[i]))
+	var column := solid(faces)
+
+	var c := Vector3(0, height * 0.98, 0)
+	var r := radius * 0.5
+	var crown := [Vector3(r, 0, 0), Vector3(0, 0, r), Vector3(-r, 0, 0), Vector3(0, 0, -r)]
+	var up := c + Vector3(0, r * 1.5, 0)
+	var down := c - Vector3(0, r * 1.1, 0)
+	var crystal := []
+	for i in 4:
+		crystal.push_back(tri(up, c + crown[i], c + crown[(i + 1) % 4]))
+		crystal.push_back(tri(down, c + crown[(i + 1) % 4], c + crown[i]))
+	var st := SurfaceTool.new()
+	st.append_from(column, 0, Transform3D.IDENTITY)
+	st.append_from(solid(crystal), 0, Transform3D.IDENTITY)
+	return st.commit()
+
+
+## The gate, in metres: an eight-sided ring standing up, facing +z.
+static func gate(outer: float, inner: float, depth: float) -> ArrayMesh:
+	var faces := []
+	for i in 8:
+		var a0 := TAU * (i - 0.5) / 8.0
+		var a1 := TAU * (i + 0.5) / 8.0
+		var o0 := Vector3(cos(a0) * outer, sin(a0) * outer, 0)
+		var o1 := Vector3(cos(a1) * outer, sin(a1) * outer, 0)
+		var i0 := Vector3(cos(a0) * inner, sin(a0) * inner, 0)
+		var i1 := Vector3(cos(a1) * inner, sin(a1) * inner, 0)
+		var dz := Vector3(0, 0, depth * 0.5)
+		faces.append_array([
+			quad(o0 + dz, o1 + dz, i1 + dz, i0 + dz), quad(o0 - dz, i0 - dz, i1 - dz, o1 - dz),
+			quad(o0 - dz, o1 - dz, o1 + dz, o0 + dz), quad(i0 - dz, i0 + dz, i1 + dz, i1 - dz),
+			quad(o0 - dz, o0 + dz, i0 + dz, i0 - dz), quad(o1 - dz, i1 - dz, i1 + dz, o1 + dz)])
+	return _merge_runs(faces, 6)
+
+
+## A box from corner to corner, in metres.
+static func box(lo: Vector3, hi: Vector3) -> Array:
+	var outline := PackedVector2Array([Vector2(lo.x, lo.z), Vector2(hi.x, lo.z), Vector2(hi.x, hi.z), Vector2(lo.x, hi.z)])
+	return prism_faces(outline, lo.y, hi.y)
+
+
+## Faces in runs of `run`, each run its own solid, joined into one mesh.
+static func _merge_runs(faces: Array, run: int) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	var i := 0
+	while i < faces.size():
+		st.append_from(solid(faces.slice(i, i + run)), 0, Transform3D.IDENTITY)
+		i += run
+	return st.commit()
+
+
 ## A bullet: a long thin octahedron from x -0.5 to 0.5, scaled by the world.
 static func bullet() -> ArrayMesh:
 	var head := Vector3(0.5, 0, 0)

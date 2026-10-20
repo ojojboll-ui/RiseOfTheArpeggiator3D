@@ -52,6 +52,20 @@ namespace np::audio
 
     struct ChordSlot { int offset; bool minor; };
 
+    /** Two ways to make a chorus or bridge from the verse (2026-10-19):
+
+        - keyLift: the verse's wheel moved up — the chorus a whole tone, the
+          bridge to the key a fourth up. Every direction keeps its function,
+          so the stick means the same thing everywhere; the key change is the
+          lift.
+        - newChords: the same key, new chords. The chorus walks the circle of
+          fifths clockwise (iv VII III VI: Dm G C F in A minor); the bridge
+          brings in the major V for tension (VI iv V i: F Dm E Am).
+
+        Chosen by ear from tools/zonepreview: new chords for PULSE and ACID,
+        and for STARFALL the lifted chorus with the new-chord bridge. */
+    enum class SectionStyle { keyLift, newChords };
+
     struct BassStep
     {
         bool  on       = false;
@@ -114,6 +128,10 @@ namespace np::audio
 
         /** The wheel slot the song starts on: its tonic, wherever that sits. */
         int homeSlot = 0;
+
+        /** How the chorus and the bridge are made (see SectionStyle). */
+        SectionStyle chorusStyle = SectionStyle::newChords;
+        SectionStyle bridgeStyle = SectionStyle::newChords;
     };
 
     inline constexpr int kNumSongs = 3;
@@ -197,7 +215,8 @@ namespace np::audio
               // splitter a glassy three-note shimmer, shard a high bell, well chord
               {{ KillSound::vibe, KillSound::plock, KillSound::harp, KillSound::shimmer, KillSound::bell, KillSound::chord }},
               0.85f,                                                     // held pad, ducked deeper than the rest so it pumps
-              1 }                                                        // starts on F#m, now to the right
+              1,                                                         // starts on F#m, now to the right
+              SectionStyle::keyLift, SectionStyle::newChords }           // a lifted chorus, the new-chord bridge (2026-10-19)
         }};
 
         return songs[(size_t) ((index % kNumSongs + kNumSongs) % kNumSongs)];
@@ -263,17 +282,6 @@ namespace np::audio
 
     using Wheel = std::array<ChordSlot, 4>;
 
-    /** Two ways to make the chorus and bridge, to be chosen by ear:
-
-        - keyLift: the verse's wheel moved up — the chorus a whole tone, the
-          bridge to the key a fourth up. Every direction keeps its function,
-          so the stick means the same thing everywhere; the key change is the
-          lift.
-        - newChords: the same key, new chords. The chorus walks the circle of
-          fifths clockwise (iv VII III VI: Dm G C F in A minor); the bridge
-          brings in the major V for tension (VI iv V i: F Dm E Am). */
-    enum class SectionStyle { keyLift, newChords };
-
     inline Wheel sectionWheel (const Song& s, int section, SectionStyle style) noexcept
     {
         if (section <= 0) return s.chords;
@@ -288,6 +296,12 @@ namespace np::audio
 
         if (section == 1) return {{ { 5, true }, { 10, false }, { 3, false }, { 8, false } }};
         return {{ { 8, false }, { 5, true }, { 7, false }, { 0, true } }};
+    }
+
+    /** The section's wheel the way the song makes it. */
+    inline Wheel sectionWheel (const Song& s, int section) noexcept
+    {
+        return sectionWheel (s, section, section == 1 ? s.chorusStyle : s.bridgeStyle);
     }
 
     inline int chordRootPc (const Song& s, const Wheel& w, int slot) noexcept

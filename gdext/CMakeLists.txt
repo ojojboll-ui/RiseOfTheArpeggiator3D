@@ -13,6 +13,7 @@ add_library(arpeggiator SHARED
     src/band_stream.cpp
     src/arp_game.cpp
     src/game/World.cpp
+    src/game/Level.cpp
 )
 target_link_libraries(arpeggiator PRIVATE godot-cpp)
 get_target_property(GODOTCPP_SUFFIX godot-cpp GODOTCPP_SUFFIX)
