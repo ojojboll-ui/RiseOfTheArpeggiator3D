@@ -1445,10 +1445,10 @@ namespace np::audio
         // guitar -21.4, vibes -31.1 dB untrimmed; the harp brought to about 2 dB
         // under PULSE's pad, the vibes (ACID) and guitar (STARFALL) 4 dB higher
         // than that, about 2 dB over theirs — they were too quiet by ear.
-        static constexpr std::array<float, 4> strumTrim { 1.0f, 1.97f, 2.70f, 0.82f };
+        static constexpr std::array<float, 4> strumTrim { 1.0f, 1.97f, 2.70f, 1.03f };   // guitar +2 dB more on 2026-10-25
         // How much of each into the room: the guitar less, a pluck wants to be
         // dry, and in STARFALL's big room it lifted the reverb 7 dB.
-        static constexpr std::array<float, 4> strumRoom { 1.0f, 1.0f, 0.65f, 0.25f };   // kept the room where it was when the trims went up   // the strum about level with it (0.30 was 9 dB over)
+        static constexpr std::array<float, 4> strumRoom { 1.0f, 1.0f, 0.65f, 0.20f };   // kept the room where it was when the trims went up   // the strum about level with it (0.30 was 9 dB over)
         float pluckPan = 0.5f;
         std::array<JunoVoice, 4> pad;
         std::array<Ensemble, 2> padChorus;
