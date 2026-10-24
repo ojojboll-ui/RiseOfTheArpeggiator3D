@@ -23,7 +23,7 @@ namespace
     // from an angle and in perspective, the 2D sizes read as specks.
     constexpr float kLook = 1.4f;
 
-    constexpr float kShipHover = 16.0f, kBulletHover = 16.0f, kPickupHover = 26.0f, kRingHover = 3.0f;
+    constexpr float kShipHover = 16.0f, kBulletHover = 16.0f, kPickupHover = 60.0f, kRingHover = 3.0f;
 
     Color toColor (np::Color c) { return Color (c.r, c.g, c.b, c.a); }
 
@@ -278,6 +278,10 @@ Dictionary ArpGame::hud() const
     d["zone"] = w->zone();
     d["towers_left"] = w->towersLeft();
     d["doors_left"] = w->doorsLeft();
+    d["clears"] = w->clears();
+    int wells = 0;
+    for (const auto& e : w->enemyList()) if (e.alive && e.kind == np::EnemyKind::well) ++wells;
+    d["wells"] = wells;
     d["gate_open"] = w->gateState().open;
     d["finished"] = w->finished();
     d["last_level"] = level >= 2;
@@ -418,13 +422,49 @@ PackedFloat32Array ArpGame::pickup_buffer (int capacity) const
     {
         if (! p.alive) continue;
         const float blink = p.life < 2.0f ? (std::sin (p.life * 25.0f) > 0.0f ? 1.0f : 0.25f) : 1.0f;
-        // Bigger than the 2D game's (2026-10-20): it was hard to tell from an enemy.
-        const float r = (30.0f + 4.0f * kick) * kScale * kLook;
-        const Basis b = (yaw (p.angle) * Basis (Vector3 (1, 0, 0), p.angle * 0.7f)).scaled (Vector3 (r, r, r));
-        const np::Color c = np::kPowerUpColor;
-        out.put (b, place (p.pos, kPickupHover), Color (c.r, c.g, c.b, blink), Color (blink, kick, 0, 0));
+        // A green ball that pulses (2026-10-24), its two rings drawn by
+        // pickup_ring_buffer; nothing else in the game is round and green.
+        const float pulse = 1.0f + 0.12f * std::sin (view()->clock() * 9.0f) + 0.15f * kick;
+        const float r = 20.0f * pulse * kScale * kLook;
+        const Basis b = yaw (p.angle).scaled (Vector3 (r, r, r));
+        const np::Color c { 0.08f, 1.0f, 0.16f };   // deeper than kPowerUpColor: the tonemapper paled it to mint
+        out.put (b, place (p.pos, kPickupHover), Color (c.r, c.g, c.b, blink * (0.8f + 0.2f * pulse)), Color (blink, kick, kick, 0));
     }
     return out.finish (lastCount);
+}
+
+PackedFloat32Array ArpGame::pickup_ring_buffer (int capacity) const
+{
+    const auto& list = view()->pickupList();
+    Writer out (capacity);
+    const float kick = view()->kick();
+    const float t = view()->clock();
+
+    for (const auto& p : list)
+    {
+        if (! p.alive) continue;
+        const float blink = p.life < 2.0f ? (std::sin (p.life * 25.0f) > 0.0f ? 1.0f : 0.25f) : 1.0f;
+        const np::Color c { 0.08f, 1.0f, 0.16f };   // deeper than kPowerUpColor: the tonemapper paled it to mint
+        // Two rings round the ball like a target, tipped a little each way and
+        // turning opposite ways, so they cross and part as they spin.
+        for (int k = 0; k < 2; ++k)
+        {
+            const float r = (k == 0 ? 34.0f : 48.0f) * kScale * kLook;
+            const float spin = (k == 0 ? 2.4f : -1.7f) * t;
+            const Basis b = (yaw (spin) * Basis (Vector3 (1, 0, 0), k == 0 ? 0.35f : -0.45f)
+                             * Basis (Vector3 (0, 0, 1), 0.25f * std::sin (t * 1.3f + (float) k))).scaled (Vector3 (r, r, r));
+            out.put (b, place (p.pos, kPickupHover), Color (c.r, c.g, c.b, blink), Color (blink, kick, kick, 0));
+        }
+    }
+    return out.finish (lastCount);
+}
+
+void ArpGame::set_view (PackedVector2Array corners)
+{
+    if (! world || corners.size() != 4) return;
+    std::array<Vec2, 4> v;
+    for (int i = 0; i < 4; ++i) v[(size_t) i] = { (float) corners[i].x / kScale, (float) corners[i].y / kScale };
+    world->setView (v);
 }
 
 PackedFloat32Array ArpGame::ring_buffer (int capacity) const
@@ -703,6 +743,9 @@ void ArpGame::_bind_methods()
     ClassDB::bind_method (D_METHOD ("spark_buffer", "capacity"), &ArpGame::spark_buffer);
     ClassDB::bind_method (D_METHOD ("pickup_buffer", "capacity"), &ArpGame::pickup_buffer);
     ClassDB::bind_method (D_METHOD ("ring_buffer", "capacity"), &ArpGame::ring_buffer);
+    ClassDB::bind_method (D_METHOD ("pickup_ring_buffer", "capacity"), &ArpGame::pickup_ring_buffer);
+    ClassDB::bind_method (D_METHOD ("set_view", "corners"), &ArpGame::set_view);
+    ClassDB::bind_method (D_METHOD ("drop_pickup_for_test"), &ArpGame::drop_pickup_for_test);
     ClassDB::bind_method (D_METHOD ("last_count"), &ArpGame::last_count);
     ClassDB::bind_method (D_METHOD ("ship_transform"), &ArpGame::ship_transform);
     ClassDB::bind_method (D_METHOD ("ship_visible"), &ArpGame::ship_visible);

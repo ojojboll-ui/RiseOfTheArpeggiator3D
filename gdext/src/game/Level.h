@@ -48,7 +48,9 @@ namespace np
     public:
         static constexpr float kCell = 20.0f;          // collision
         static constexpr float kFlowCell = 40.0f;      // enemies' way-finding
-        static constexpr float kHillCell = 80.0f;      // terrain facets
+        static constexpr float kHillCell = 120.0f;     // terrain facets (80 before the level grew)
+        static constexpr float kScale = 1.5f;          // the layout, half as big again (2026-10-24)
+        static constexpr float kHillLift = 2.0f;       // hills twice as tall: steeper than before though wider
         static constexpr float kWallHeight = 80.0f;    // interior walls, for drawing
         static constexpr float kRimHeight = 50.0f;     // the rooms' edges
 

@@ -21,6 +21,11 @@ tower that falls takes away one of them. Through the last door is the exit:
 fly into it for the next song — PULSE, then ACID, then STARFALL — with your
 score, lives and bombs.
 
+The ship is a hovercraft: it carries its momentum and slides through turns,
+and hills slow it going up and speed it going down — enemies too. Shooting
+down a black hole (the orange ball) clears every enemy on the screen, as the
+bomb does. Power-ups are green balls inside two spinning rings.
+
 Slow motion leaves trails behind everything that shines.
 
 Still to come: a pass on looks and menus.
@@ -75,7 +80,7 @@ zonepreview ..\..\out` renders each song through its sections.
 
 The game takes flags after `--`: `--demo` (the autopilot plays), `--level N`,
 `--difficulty easy|normal|hard`, `--seconds T`, `--shots DIR --every S`
-(screenshots), `--wav PATH`, `--reckless`, `--slowtest`. `snap.sh` wraps them.
+(screenshots), `--wav PATH`, `--reckless`, `--slowtest`, `--counts`, `--lookexit`, `--pickup`. `snap.sh` wraps them.
 
 ## Layout
 

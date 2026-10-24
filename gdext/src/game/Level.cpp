@@ -39,20 +39,24 @@ namespace np
         const int variant = ((levelIndex % 3) + 3) % 3;
 
         // The triangle: chorus at the top, verse bottom left, bridge bottom
-        // right, and above the chorus the corridor out. Rooms are 22 x 19 m
-        // (18 x 16 until 2026-10-20, "gör zonerna lite större"); the passages
-        // 4 m wide and 8 m long; the exit corridor 6 m wide and 12 m long.
-        w = 5600.0f;
-        h = 6200.0f;
-        exitRect = { 2500.0f, 200.0f, 3100.0f, 1400.0f };
-        roomList[1] = { { 1700.0f, 1400.0f, 3900.0f, 3300.0f }, 1, false, true  };   // chorus: walls
-        roomList[0] = { { 200.0f,  4100.0f, 2400.0f, 6000.0f }, 0, true,  false };   // verse: hills
-        roomList[2] = { { 3200.0f, 4100.0f, 5400.0f, 6000.0f }, 2, true,  true  };   // bridge: both
+        // right, and above the chorus the corridor out. Everything was made
+        // half as big again in every direction on 2026-10-24 (kScale) — the
+        // passages too, "lika rymliga som den nya storleken" — with no more
+        // walls and the same number of enemies, so the game breathes more:
+        // rooms 33 x 28.5 m, passages 6 m wide and 12 m long, the exit
+        // corridor 9 m wide and 18 m long.
+        auto R = [] (float x0, float y0, float x1, float y1) { return Rect { x0 * kScale, y0 * kScale, x1 * kScale, y1 * kScale }; };
+        w = 5600.0f * kScale;
+        h = 6200.0f * kScale;
+        exitRect = R (2500.0f, 200.0f, 3100.0f, 1400.0f);
+        roomList[1] = { R (1700.0f, 1400.0f, 3900.0f, 3300.0f), 1, false, true  };   // chorus: walls
+        roomList[0] = { R (200.0f,  4100.0f, 2400.0f, 6000.0f), 0, true,  false };   // verse: hills
+        roomList[2] = { R (3200.0f, 4100.0f, 5400.0f, 6000.0f), 2, true,  true  };   // bridge: both
 
         passageList = {
-            { 2400.0f, 4850.0f, 3200.0f, 5250.0f },    // verse - bridge
-            { 1950.0f, 3300.0f, 2350.0f, 4100.0f },    // verse - chorus
-            { 3250.0f, 3300.0f, 3650.0f, 4100.0f },    // bridge - chorus
+            R (2400.0f, 4850.0f, 3200.0f, 5250.0f),    // verse - bridge
+            R (1950.0f, 3300.0f, 2350.0f, 4100.0f),    // verse - chorus
+            R (3250.0f, 3300.0f, 3650.0f, 4100.0f),    // bridge - chorus
             exitRect };
 
         const Rect& verse = roomList[0].r;
@@ -63,11 +67,11 @@ namespace np
         // chorus end: verse, chorus, bridge, verse, chorus, bridge.
         for (int d = 0; d < kDoors; ++d)
         {
-            const float y = exitRect.y1 - 160.0f - (float) d * 150.0f;
+            const float y = exitRect.y1 - (160.0f + (float) d * 150.0f) * kScale;
             doorList[(size_t) d] = { exitRect.x0, y - 20.0f, exitRect.x1, y + 20.0f };
             doorIsOpen[(size_t) d] = false;
         }
-        gatePos = { exitRect.centre().x, exitRect.y0 + 160.0f };
+        gatePos = { exitRect.centre().x, exitRect.y0 + 160.0f * kScale };
 
         // Walls: a layout per level.
         wallList.clear();
@@ -76,32 +80,33 @@ namespace np
             case 0:
                 for (float u : { 0.30f, 0.70f })
                     for (float v : { 0.33f, 0.67f })
-                        wallList.push_back (block (chorus, u, v, 200.0f, 200.0f));
-                wallList.push_back (block (bridge, 0.32f, 0.42f, 90.0f, 700.0f));
-                wallList.push_back (block (bridge, 0.78f, 0.60f, 600.0f, 90.0f));
+                        wallList.push_back (block (chorus, u, v, 200.0f * kScale, 200.0f * kScale));
+                wallList.push_back (block (bridge, 0.32f, 0.42f, 90.0f * kScale, 700.0f * kScale));
+                wallList.push_back (block (bridge, 0.78f, 0.60f, 600.0f * kScale, 90.0f * kScale));
                 break;
 
             case 1:
-                wallList.push_back (block (chorus, 0.5f, 0.30f, 800.0f, 90.0f));
-                wallList.push_back (block (chorus, 0.5f, 0.70f, 800.0f, 90.0f));
-                wallList.push_back (block (chorus, 0.12f, 0.5f, 90.0f, 500.0f));
-                wallList.push_back (block (chorus, 0.88f, 0.5f, 90.0f, 500.0f));
-                wallList.push_back (block (bridge, 0.32f, 0.30f, 600.0f, 90.0f));
-                wallList.push_back (block (bridge, 0.32f, 0.70f, 600.0f, 90.0f));
+                wallList.push_back (block (chorus, 0.5f, 0.30f, 800.0f * kScale, 90.0f * kScale));
+                wallList.push_back (block (chorus, 0.5f, 0.70f, 800.0f * kScale, 90.0f * kScale));
+                wallList.push_back (block (chorus, 0.12f, 0.5f, 90.0f * kScale, 500.0f * kScale));
+                wallList.push_back (block (chorus, 0.88f, 0.5f, 90.0f * kScale, 500.0f * kScale));
+                wallList.push_back (block (bridge, 0.32f, 0.30f, 600.0f * kScale, 90.0f * kScale));
+                wallList.push_back (block (bridge, 0.32f, 0.70f, 600.0f * kScale, 90.0f * kScale));
                 break;
 
             default:
                 for (float su : { -1.0f, 1.0f })
                     for (float sv : { -1.0f, 1.0f })
                     {
-                        const Vec2 c = chorus.centre() + Vec2 { su * 460.0f, sv * 420.0f };
-                        wallList.push_back ({ std::min (c.x, c.x - su * 320.0f), c.y - 45.0f, std::max (c.x, c.x - su * 320.0f), c.y + 45.0f });
-                        wallList.push_back ({ c.x - 45.0f, std::min (c.y, c.y - sv * 320.0f), c.x + 45.0f, std::max (c.y, c.y - sv * 320.0f) });
+                        const Vec2 c = chorus.centre() + Vec2 { su * 460.0f, sv * 420.0f } * kScale;
+                        const float arm = 320.0f * kScale, half = 45.0f * kScale;
+                        wallList.push_back ({ std::min (c.x, c.x - su * arm), c.y - half, std::max (c.x, c.x - su * arm), c.y + half });
+                        wallList.push_back ({ c.x - half, std::min (c.y, c.y - sv * arm), c.x + half, std::max (c.y, c.y - sv * arm) });
                     }
                 // A fortress in the bridge, open to the right.
-                wallList.push_back (block (bridge, 0.47f, 0.5f, 90.0f, 620.0f));
-                wallList.push_back (block (bridge, 0.60f, 0.33f, 480.0f, 90.0f));
-                wallList.push_back (block (bridge, 0.60f, 0.67f, 480.0f, 90.0f));
+                wallList.push_back (block (bridge, 0.47f, 0.5f, 90.0f * kScale, 620.0f * kScale));
+                wallList.push_back (block (bridge, 0.60f, 0.33f, 480.0f * kScale, 90.0f * kScale));
+                wallList.push_back (block (bridge, 0.60f, 0.67f, 480.0f * kScale, 90.0f * kScale));
                 break;
         }
 
@@ -140,10 +145,12 @@ namespace np
         const HillSpec bridgeHills[] {
             { 0.20f, 0.55f, 460.0f, 160.0f }, { 0.42f, 0.10f, 360.0f, -100.0f },
             { 0.75f, 0.40f, 360.0f, 130.0f }, { 0.70f, 0.92f, 320.0f, -85.0f } };
+        // Bigger since 2026-10-24: as wide as the rooms grew, and taller still,
+        // so the slopes are steeper and the ship and enemies feel them.
         for (const auto& hs : verseHills)
-            addHill (roomList[0], verse.at (mirror ? 1.0f - hs.u : hs.u, hs.v), hs.radius, hs.height);
+            addHill (roomList[0], verse.at (mirror ? 1.0f - hs.u : hs.u, hs.v), hs.radius * kScale, hs.height * kHillLift);
         for (const auto& hs : bridgeHills)
-            addHill (roomList[2], bridge.at (mirror ? 1.0f - hs.u : hs.u, hs.v), hs.radius, hs.height);
+            addHill (roomList[2], bridge.at (mirror ? 1.0f - hs.u : hs.u, hs.v), hs.radius * kScale, hs.height * kHillLift);
 
         fcols = (int) std::ceil (w / kFlowCell);
         frows = (int) std::ceil (h / kFlowCell);
@@ -199,7 +206,7 @@ namespace np
                 // Flat along the room's edges, under the passages' mouths, and
                 // round the start, the gate and the tower, so those stand level.
                 const float edge = std::min ({ p.x - room.r.x0, room.r.x1 - p.x, p.y - room.r.y0, room.r.y1 - p.y });
-                float fade = smooth (60.0f, 260.0f, edge);
+                float fade = smooth (90.0f, 390.0f, edge);
                 fade *= smooth (180.0f, 380.0f, (p - startPos).length());
                 for (const Vec2 flat : towerSpots[(size_t) room.zone])
                     fade *= smooth (160.0f, 340.0f, (p - flat).length());

@@ -18,6 +18,7 @@ extends Node3D
 ##   --slowtest        the autopilot holds slow motion 3 s in every 12
 ##   --counts          print counts and state once a second
 ##   --lookexit        the camera looks at the exit corridor instead
+##   --pickup          drops a power-up ahead of the ship every 240 frames
 
 const ENEMY_CAP := 256
 const BULLET_CAP := 768
@@ -65,6 +66,7 @@ var enemy_mm: Array[MultiMesh] = []
 var bullet_mm: MultiMesh
 var spark_mm: MultiMesh
 var pickup_mm: MultiMesh
+var pickup_ring_mm: MultiMesh
 var ring_mm: MultiMesh
 
 var screen := Screen.MENU
@@ -217,8 +219,14 @@ func _build_scene() -> void:
 	bullet_mm = _multimesh(Meshes.bullet(), bullet_mat, BULLET_CAP, false)
 
 	var pickup_mat := _neon_material(true)
-	pickup_mat.set_shader_parameter("body_energy", 0.8)
+	pickup_mat.set_shader_parameter("body_energy", 0.35)
+	pickup_mat.set_shader_parameter("edge_energy", 0.7)
+	pickup_mat.set_shader_parameter("albedo_amount", 0.5)
 	pickup_mm = _multimesh(Meshes.pickup(), pickup_mat, PICKUP_CAP)
+	var hoop_mat := _neon_material(true)
+	hoop_mat.set_shader_parameter("body_energy", 0.45)
+	hoop_mat.set_shader_parameter("edge_energy", 0.5)
+	pickup_ring_mm = _multimesh(Meshes.hoop(), hoop_mat, PICKUP_CAP * 2, false)
 
 	var spark_mat := ShaderMaterial.new()
 	spark_mat.shader = load("res://shaders/spark.gdshader")
@@ -248,8 +256,8 @@ func _build_level() -> void:
 	# Floor: a fine plane the floor shader lifts with the hills and waves.
 	var plane := PlaneMesh.new()
 	plane.size = map
-	plane.subdivide_width = int(map.x / 0.2)
-	plane.subdivide_depth = int(map.y / 0.2)
+	plane.subdivide_width = int(map.x / 0.25)
+	plane.subdivide_depth = int(map.y / 0.25)
 	floor_mat = ShaderMaterial.new()
 	floor_mat.shader = load("res://shaders/floor.gdshader")
 	var wc := game.floor_columns()
@@ -409,7 +417,7 @@ func _multimesh(mesh: Mesh, mat: Material, cap: int, shadows := true) -> MultiMe
 	node.material_override = mat
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	# The instances move all over the level; never cull them by the mesh's own box.
-	node.custom_aabb = AABB(Vector3(-10, -5, -10), Vector3(80, 15, 80))
+	node.custom_aabb = AABB(Vector3(-10, -5, -10), Vector3(120, 20, 120))
 	add_child(node)
 	return mm
 
@@ -522,6 +530,8 @@ func _play(delta: float) -> void:
 		game.pause_band()
 		return
 
+	if _flag("--pickup") and Engine.get_process_frames() % 240 == 0:
+		game.drop_pickup_for_test()
 	var c := pad.controls(_mouse_aim())
 	game.step(delta, c.move, c.aim, c.fire, c.bomb, c.slow)
 	if game.take_died():
@@ -595,9 +605,10 @@ func _draw_world(delta: float) -> void:
 	_fill(bullet_mm, game.bullet_buffer(BULLET_CAP))
 	_fill(spark_mm, game.spark_buffer(SPARK_CAP))
 	if _flag("--counts") and Engine.get_process_frames() % 60 == 0:
-		print("t %.1f slow %.2f sparks %d zone %d section %s towers %d gate %s phase %d score %d" % [clock, d.slow_amount, spark_mm.visible_instance_count,
+		print("t %.1f wells %d clears %d slow %.2f sparks %d zone %d section %s towers %d gate %s phase %d score %d" % [clock, d.wells, d.clears, d.slow_amount, spark_mm.visible_instance_count,
 			d.zone, d.section_name, d.towers_left, d.gate_open, d.phase, d.score])
 	_fill(pickup_mm, game.pickup_buffer(PICKUP_CAP))
+	_fill(pickup_ring_mm, game.pickup_ring_buffer(PICKUP_CAP * 2))
 	_fill(ring_mm, game.ring_buffer(RING_CAP))
 
 	# The ship, in the colour of the chord being played round its outline.
@@ -661,6 +672,18 @@ func _draw_world(delta: float) -> void:
 	var shake: Vector2 = d.shake if playing else Vector2.ZERO
 	camera.position = cam_target + back * (DISTANCE / zoom) + Vector3(shake.x, 0.0, shake.y)
 	camera.look_at(cam_target + Vector3(shake.x, 0.0, shake.y) * 0.5, Vector3.UP)
+
+	# What the camera sees of the floor, for the bomb and a shot-down black hole.
+	if playing:
+		var corners := PackedVector2Array()
+		var vs := Vector2(view3d.size)
+		for c in [Vector2(0, 0), Vector2(vs.x, 0), Vector2(vs.x, vs.y), Vector2(0, vs.y)]:
+			var o := camera.project_ray_origin(c)
+			var r := camera.project_ray_normal(c)
+			var t: float = (0.0 - o.y) / r.y if r.y < -0.01 else 80.0
+			var hit: Vector3 = o + r * minf(t, 80.0)
+			corners.push_back(Vector2(hit.x, hit.z))
+		game.set_view(corners)
 
 	# Flash on deaths and bombs; slow motion's trails, and its blur and
 	# aberration round the ship. The trail keeps 85% per sixtieth of a second,

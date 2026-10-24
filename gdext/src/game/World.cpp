@@ -61,7 +61,7 @@ namespace np
     namespace
     {
         constexpr float kSparkGravity = 1800.0f;
-        constexpr float kSlopePull = 520.0f;      // how hard hills roll enemies down, units/s² per unit of slope
+        constexpr float kSlopePull = 750.0f;      // how hard hills roll enemies down, units/s² per unit of slope (520 until the hills grew)
         constexpr float kTowerHp = 160.0f;        // hits: about fifteen seconds of the arpeggio at 1/8; the second wave's
         constexpr float kFirstWaveHp = 80.0f;     // half as many for the first three (2026-10-20)
         constexpr float kRiseSeconds = 1.5f;
@@ -432,19 +432,36 @@ namespace np
     {
         if (! ship.alive) { band.firing = false; return; }
 
-        // Speed follows deflection with a slight curve, so small corrections
-        // are fine; this is a position control, not something heard.
-        Vec2 move = in.move;
-        const float m = std::min (1.0f, move.length());
-        if (m > 0.0f) move = move.normalised() * std::pow (m, 1.3f);
+        // A hovercraft since 2026-10-24 ("sladdar", "mycket"): the nose turns
+        // towards the stick at a limited rate, thrust pushes along the nose,
+        // and the hull grips sideways only loosely, so the ship carries its
+        // momentum and slides through every turn. Forward drag sets the top
+        // speed (thrust / drag = kShipSpeed); hills pull it downhill.
+        const Vec2 stick = in.move;
+        const float m = std::min (1.0f, stick.length());
+        const float push = m > 0.05f ? std::pow (m, 1.3f) : 0.0f;
 
-        // Hills: a little slower up, a little faster down.
-        const float climb = m > 0.0f ? dot (lvl.slope (ship.pos), move.normalised()) : 0.0f;
-        const float hill = std::clamp (1.0f - climb * 1.2f, 0.75f, 1.25f);
+        if (push > 0.0f)
+        {
+            const float turn = angleDiff (stick.angle(), ship.angle);
+            ship.angle += std::clamp (turn, -kShipTurnRate * dt, kShipTurnRate * dt);
+        }
+        const Vec2 nose = fromAngle (ship.angle);
+        // Full thrust once the nose points where the stick does; some while it swings round.
+        const float align = push > 0.0f ? std::max (0.0f, std::cos (angleDiff (stick.angle(), ship.angle))) : 0.0f;
+        const float thrust = kShipThrust * push * (0.35f + 0.65f * align);
 
-        const Vec2 target = move * (kShipSpeed * hill);
-        ship.vel += (target - ship.vel) * std::min (1.0f, dt * 14.0f);
+        const float forward = dot (ship.vel, nose);
+        const Vec2 lateral = ship.vel - nose * forward;
+        ship.vel = nose * (forward * std::exp (-kShipDrag * dt)) + lateral * std::exp (-dt / kShipSlide);
+        ship.vel += nose * (thrust * dt);
+        {
+            Vec2 pull = lvl.slope (ship.pos) * kShipSlopePull;
+            if (pull.length() > kShipMaxPull) pull = pull.normalised() * kShipMaxPull;
+            ship.vel -= pull * dt;
+        }
         ship.pos += ship.vel * dt;
+        shipThrust = thrust / kShipThrust;
 
         // Wells pull the ship as well.
         for (const auto& e : enemies)
@@ -455,21 +472,24 @@ namespace np
             if (dist < 420.0f && dist > 1.0f) ship.pos += d / dist * (120.0f * (1.0f - dist / 420.0f) * dt);
         }
 
-        ship.pos = keepOut (ship.pos, 18.0f);
-
-        if (ship.vel.length() > 40.0f)
+        // Walls: pushed out, and the speed into the wall bounces back a little.
         {
-            const float want = ship.vel.angle();
-            ship.angle += angleDiff (want, ship.angle) * std::min (1.0f, dt * 16.0f);
+            Vec2 n;
+            ship.pos = keepOut (ship.pos, 18.0f, &n);
+            const float into = dot (ship.vel, n);
+            if (n.lengthSq() > 0.0f && into < 0.0f) ship.vel -= n * (into * 1.4f);
+        }
 
-            // Exhaust in the colour of the chord being played.
-            const int n = (int) (ship.vel.length() / kShipSpeed * 3.0f) + 1;
+        if (shipThrust > 0.05f)
+        {
+            // Exhaust in the colour of the chord being played, as hard as the thrust.
+            const int n = (int) (shipThrust * 3.0f) + 1;
             const Color c = chordColor (band.pubChord.load());
             for (int i = 0; i < n; ++i)
             {
                 Particle p;
                 p.pos = ship.pos - fromAngle (ship.angle, 14.0f);
-                p.vel = -ship.vel.normalised() * rng.range (150.0f, 380.0f) + rng.inDisc (90.0f);
+                p.vel = ship.vel * 0.3f - fromAngle (ship.angle, rng.range (220.0f, 450.0f)) + rng.inDisc (90.0f);
                 p.color = c.withAlpha (0.7f);
                 p.life = p.maxLife = rng.range (0.25f, 0.55f);
                 p.width = 2.2f;
@@ -708,19 +728,24 @@ namespace np
 
             const Vec2 toward = chaseDirection (e.pos);
 
+            // Hills (stronger since 2026-10-24): slower up, faster down, for
+            // whatever way the enemy means to go.
+            const Vec2 slopeHere = lvl.slope (e.pos);
+            auto hill = [&] (Vec2 dir) { return std::clamp (1.0f - dot (slopeHere, dir) * 1.6f, 0.45f, 1.6f); };
+
             switch (e.kind)
             {
                 case EnemyKind::wanderer:
                 {
                     e.wander += rng.range (-2.5f, 2.5f) * dt;
-                    const Vec2 want = fromAngle (e.wander, 150.0f * speedUp);
+                    const Vec2 want = fromAngle (e.wander, 150.0f * speedUp * hill (fromAngle (e.wander)));
                     e.vel += (want - e.vel) * std::min (1.0f, dt * 2.0f);
                     break;
                 }
 
                 case EnemyKind::seeker:
                 {
-                    const Vec2 want = toward * (230.0f * speedUp);
+                    const Vec2 want = toward * (230.0f * speedUp * hill (toward));
                     e.vel += (want - e.vel) * std::min (1.0f, dt * 2.5f);
                     e.angle = e.vel.angle();
                     break;
@@ -728,7 +753,7 @@ namespace np
 
                 case EnemyKind::dodger:
                 {
-                    Vec2 want = toward * (210.0f * speedUp);
+                    Vec2 want = toward * (210.0f * speedUp * hill (toward));
 
                     // Sidestep any bullet heading this way.
                     for (const auto& b : bullets)
@@ -748,7 +773,7 @@ namespace np
 
                 case EnemyKind::splitter:
                 {
-                    const Vec2 want = toward * (150.0f * speedUp);
+                    const Vec2 want = toward * (150.0f * speedUp * hill (toward));
                     e.vel += (want - e.vel) * std::min (1.0f, dt * 1.6f);
                     break;
                 }
@@ -756,7 +781,8 @@ namespace np
                 case EnemyKind::shard:
                 {
                     // Circle in on the ship rather than straight at it.
-                    const Vec2 want = (toward + toward.perp() * 0.8f).normalised() * (300.0f * speedUp);
+                    const Vec2 dir = (toward + toward.perp() * 0.8f).normalised();
+                    const Vec2 want = dir * (300.0f * speedUp * hill (dir));
                     e.vel += (want - e.vel) * std::min (1.0f, dt * 3.0f);
                     break;
                 }
@@ -1127,7 +1153,11 @@ namespace np
                     e.flash = 1.0f;
                     e.vel += b.vel * 0.01f;
                     grid.push (e.pos, 120.0f, 120.0f);
-                    if (e.hp <= 0.0f) kill (e, b.chord, true, true, b.note);
+                    if (e.hp <= 0.0f)
+                    {
+                        kill (e, b.chord, true, true, b.note);
+                        clearScreen (e.pos, b.chord);   // shot down, a black hole takes the screen with it
+                    }
                 }
                 else
                 {
@@ -1265,7 +1295,7 @@ namespace np
         band.post ({ Command::bomb });
 
         for (auto& e : enemies)
-            if (e.alive && (e.pos - ship.pos).length() < kBombRadius) kill (e, band.pubChord.load(), false, false);
+            if (e.alive && onScreen (e.pos)) kill (e, band.pubChord.load(), false, false);
         grid.push (ship.pos, 3200.0f, 1400.0f);
         rings.push_back ({ ship.pos, 30.0f, 2200.0f, 0.9f, kBombColor });
         rings.push_back ({ ship.pos, 10.0f, 1600.0f, 1.1f, { 1, 1, 1 } });
@@ -1273,6 +1303,48 @@ namespace np
         shakeAmount = 18.0f;
         flashAmount = 0.8f;
         ship.invulnerable = std::max (ship.invulnerable, 1.0f);
+    }
+
+    void World::setView (const std::array<Vec2, 4>& corners)
+    {
+        view = corners;
+        viewSet = true;
+    }
+
+    bool World::onScreen (Vec2 p) const
+    {
+        if (! viewSet) return (p - ship.pos).length() < kBombRadius;
+        // Inside the convex quad the camera sees on the floor: on the same
+        // side of all four edges.
+        float sign = 0.0f;
+        for (int i = 0; i < 4; ++i)
+        {
+            const Vec2 a = view[(size_t) i], b = view[(size_t) ((i + 1) % 4)];
+            const float c = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+            if (sign == 0.0f) sign = c;
+            else if (c * sign < 0.0f) return false;
+        }
+        return true;
+    }
+
+    void World::clearScreen (Vec2 from, int chord)
+    {
+        // A black hole shot down goes off like the bomb (2026-10-24): every
+        // enemy on the screen goes with it, for the score, and the bomb's
+        // swoosh and its bang on the next 32nd.
+        band.post ({ Command::bomb });
+        int n = 0;
+        for (auto& e : enemies)
+            if (e.alive && onScreen (e.pos)) { kill (e, chord, true, false); ++n; }
+        const Color c = enemyColor (EnemyKind::well);
+        grid.push (from, 3000.0f, 1400.0f);
+        rings.push_back ({ from, 30.0f, 2400.0f, 0.9f, c });
+        rings.push_back ({ from, 10.0f, 1700.0f, 1.1f, { 1, 1, 1 } });
+        explode (from, c, { 1.0f, 0.9f, 0.5f }, 300, 1700.0f, 1.6f, 1.1f);
+        shakeAmount = std::max (shakeAmount, 16.0f);
+        flashAmount = std::max (flashAmount, 0.6f);
+        if (n > 0) say ("BLACK HOLE  ·  " + std::to_string (n) + " DOWN", 1.6f, c);
+        ++screenClears;
     }
 
     void World::threats (std::vector<Threat>& out) const

@@ -31,7 +31,18 @@
 */
 namespace np
 {
-    constexpr float kShipSpeed   = 560.0f;
+    constexpr float kShipSpeed   = 560.0f;      // top speed on the flat
+
+    // The hovercraft (2026-10-24): thrust / drag = top speed.
+    constexpr float kShipDrag       = 1.6f;     // forward speed lost per second, as a rate
+    constexpr float kShipThrust     = kShipSpeed * kShipDrag;
+    constexpr float kShipSlide      = 0.7f;     // seconds for sideways speed to fall to a third: "mycket" sladd
+    constexpr float kShipTurnRate   = 6.0f;     // radians a second the nose can swing
+    // Downhill pull: at most kShipMaxPull, well under the thrust, so the ship
+    // climbs every hill — slowly, at about 40% speed up the steepest
+    // ("borde kunna åka uppför alla kullar om än sakta", 2026-10-24).
+    constexpr float kShipSlopePull  = 750.0f;   // units/s² downhill per unit of slope
+    constexpr float kShipMaxPull    = 0.6f * kShipThrust;
     constexpr float kBulletSpeed = 1500.0f;
 
     struct Controls
@@ -75,6 +86,13 @@ namespace np
         void update (float dt, const Controls& in);
         void onEvent (const audio::Event& e);
         Carry carry() const { return { points, lives, bombs }; }
+
+        /** What the camera sees of the floor, as four corners in the level's
+            units: the bomb and a shot-down black hole clear this. */
+        void setView (const std::array<Vec2, 4>& corners);
+
+        /** For looking at it in a test: a power-up ahead of the ship. */
+        void dropPickupForTest() { pickups.push_back ({ ship.pos + fromAngle (ship.angle, 260.0f), {}, 30.0f, 0.0f, true }); }
 
         /** Floor and sparks only — for the menu's background, round the
             verse room's start. */
@@ -169,6 +187,7 @@ namespace np
         Vec2 aim() const { return aimDir; }
         int zone() const { return shipZone; }
         int towersLeft() const;
+        int clears() const { return screenClears; }   // black holes shot down, for tests
         bool finished() const { return state == Phase::cleared && level >= 2; }
 
         /** The ground's height under a point: hills and the floor's waves. */
@@ -217,6 +236,12 @@ namespace np
         void detonateBomb();
         void addScore (int amount, Vec2 where);
         void say (const std::string& text, float life, Color color);
+        void clearScreen (Vec2 from, int chord);
+        bool onScreen (Vec2 p) const;
+        std::array<Vec2, 4> view {};
+        bool viewSet = false;
+        float shipThrust = 0.0f;
+        int screenClears = 0;
         void placeTowers();
 
         /** Where a sound sits left to right: measured from the ship, since the

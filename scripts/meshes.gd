@@ -164,9 +164,40 @@ static func well() -> ArrayMesh:
 	return solid(faces)
 
 
-## Power-up: a tetrahedron, smaller.
+## Power-up: a ball (2026-10-24), an icosahedron split once — eighty facets,
+## round enough to read as a ball and still lowpoly.
 static func pickup() -> ArrayMesh:
-	return solid(_tetra(1.0))
+	var t := (1.0 + sqrt(5.0)) / 2.0
+	var v := [Vector3(-1, t, 0), Vector3(1, t, 0), Vector3(-1, -t, 0), Vector3(1, -t, 0),
+		Vector3(0, -1, t), Vector3(0, 1, t), Vector3(0, -1, -t), Vector3(0, 1, -t),
+		Vector3(t, 0, -1), Vector3(t, 0, 1), Vector3(-t, 0, -1), Vector3(-t, 0, 1)]
+	var idx := [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2],
+		[10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11],
+		[6, 2, 10], [8, 6, 7], [9, 8, 1]]
+	var faces := []
+	for f in idx:
+		var a: Vector3 = v[f[0]].normalized()
+		var b: Vector3 = v[f[1]].normalized()
+		var c: Vector3 = v[f[2]].normalized()
+		var ab := ((a + b) * 0.5).normalized()
+		var bc := ((b + c) * 0.5).normalized()
+		var ca := ((c + a) * 0.5).normalized()
+		faces.append_array([tri(a, ab, ca), tri(ab, b, bc), tri(ca, bc, c), tri(ab, bc, ca)])
+	return solid(faces)
+
+
+## A thin ring of radius 1 in the xz plane: the power-up's target rings.
+static func hoop(segments := 24, tube := 0.06) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	for i in segments:
+		var a0 := TAU * i / segments
+		var a1 := TAU * (i + 1) / segments
+		var o0 := Vector2(cos(a0), sin(a0)) * (1.0 + tube)
+		var o1 := Vector2(cos(a1), sin(a1)) * (1.0 + tube)
+		var i0 := Vector2(cos(a0), sin(a0)) * (1.0 - tube)
+		var i1 := Vector2(cos(a1), sin(a1)) * (1.0 - tube)
+		st.append_from(solid(prism_faces(PackedVector2Array([o0, o1, i1, i0]), -tube, tube)), 0, Transform3D.IDENTITY)
+	return st.commit()
 
 
 ## The ship: a dart with a raised spine and a notch at the back, in metres,
