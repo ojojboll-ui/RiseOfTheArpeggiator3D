@@ -34,7 +34,7 @@ namespace np
     constexpr float kShipSpeed   = 560.0f;      // top speed on the flat
 
     // The hovercraft (2026-10-24): thrust / drag = top speed.
-    constexpr float kShipDrag       = 1.6f;     // forward speed lost per second, as a rate
+    constexpr float kShipDrag       = 2.4f;     // forward speed lost per second, as a rate: 1.6 accelerated too slowly (2026-10-24)
     constexpr float kShipThrust     = kShipSpeed * kShipDrag;
     constexpr float kShipSlide      = 0.42f;    // seconds for sideways speed to fall to a third: 0.7 ("mycket") was too much, 2026-10-24
     constexpr float kShipTurnRate   = 6.0f;     // radians a second the nose can swing
