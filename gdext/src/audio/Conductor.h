@@ -492,7 +492,8 @@ namespace np::audio
                 }
 
                 droneUpdate();
-                if (partOn (Part::strum) && ! dropped && (changed || (t == 0 && bar % 2 == 0)) && k - lastStrumTick >= kTicksPerBeat)
+                // Only when the chord changes (2026-10-24; every other downbeat as well was too often).
+                if (partOn (Part::strum) && ! dropped && changed && k - lastStrumTick >= kTicksPerBeat)
                     startStrum (k);
 
                 if (! dropped)
@@ -1042,8 +1043,9 @@ namespace np::audio
         }
 
         // The strum (2026-10-24): an Omnichord sweep up eight chord tones,
-        // a 32nd apart, left to right, ringing long. On every chord change
-        // and every other downbeat while its layer is in.
+        // a 32nd apart, left to right, ringing long, whenever the chord
+        // changes while its layer is in. Each song strums its own Omnichord
+        // voice (strumVoice in Songs.h).
         void startStrum (std::int64_t k) noexcept
         {
             const int root = placeAbove (rootPc (chord), 55);
@@ -1069,7 +1071,8 @@ namespace np::audio
                 const int note = strumNotes[(size_t) strumIndex];
                 const float hz = 440.0f * std::pow (2.0f, (float) (note - 69) / 12.0f);
                 const float ring = std::pow (0.001f, 1.0f / (float) (sampleRate * 3.5));
-                v->start (hz, 0.55f + 0.04f * (float) strumIndex, ring, voiceSpec (0), 0, ++order);
+                const int spec = strumVoice (*current);
+                v->start (hz, 0.55f + 0.04f * (float) strumIndex, ring, voiceSpec (spec), 0, ++order);
                 strumPan[(size_t) (v - strumVoices.data())] = 0.2f + 0.6f * (float) strumIndex / 7.0f;
                 ++strumIndex;
             }
@@ -1270,8 +1273,12 @@ namespace np::audio
                     strumR += x * std::sin (strumPan[k] * 1.5707963f);
                 }
 
-                reverb.process ((al + hl * 0.8f + pdl * 0.6f + droneL * 0.5f + strumL * 0.7f) * send,
-                                (ar + hr * 0.8f + pdr * 0.6f + droneR * 0.5f + strumR * 0.7f) * send, wl, wr);
+                // The drone and strum are sent at their own levels (the raw sums
+                // went in at first and the room drowned the acid song).
+                const float droneSend = kDrone * 1.5f;
+                const float strumSend = kStrum * strumTrim[(size_t) strumVoice (*current)] * 2.5f * strumRoom[(size_t) strumVoice (*current)];
+                reverb.process ((al + hl * 0.8f + pdl * 0.6f + droneL * droneSend + strumL * strumSend) * send,
+                                (ar + hr * 0.8f + pdr * 0.6f + droneR * droneSend + strumR * strumSend) * send, wl, wr);
 
                 // Mix ---------------------------------------------------------------
                 const float duckBass = 1.0f - 0.55f * pump;
@@ -1294,7 +1301,7 @@ namespace np::audio
                 // Drone and strum: music, so under the slow filter too.
                 {
                     const float gDrone = (busMask & busDrone) ? kDrone * (1.0f - 0.35f * pump) : 0.0f;
-                    const float gStrum = (busMask & busStrum) ? kStrum * (1.0f - 0.25f * pump) : 0.0f;
+                    const float gStrum = (busMask & busStrum) ? kStrum * strumTrim[(size_t) strumVoice (*current)] * (1.0f - 0.25f * pump) : 0.0f;
                     l += droneL * gDrone + strumL * gStrum;
                     r += droneR * gDrone + strumR * gStrum;
                 }
@@ -1431,7 +1438,17 @@ namespace np::audio
         std::array<JunoVoice, 3> drone;
         float droneL = 0.0f, droneR = 0.0f, strumL = 0.0f, strumR = 0.0f;
         static constexpr float kDrone = 0.34f;   // levels set against the pad by tools/audiotest: drone ~4 dB under it,
-        static constexpr float kStrum = 0.11f;   // the strum about level with it (0.30 was 9 dB over)
+        static constexpr float kStrum = 0.11f;
+        // Per Omnichord voice, so every song's strum sits at the same level
+        // (OMNI, HARPA, VIBRAFON, GITARR; measured by tools/audiotest).
+        // Measured with tools/layerpreview (measure), a strum a bar: harp -34.9,
+        // guitar -21.4, vibes -31.1 dB untrimmed; the harp brought to about 2 dB
+        // under PULSE's pad, the vibes (ACID) and guitar (STARFALL) 4 dB higher
+        // than that, about 2 dB over theirs — they were too quiet by ear.
+        static constexpr std::array<float, 4> strumTrim { 1.0f, 1.97f, 2.70f, 0.82f };
+        // How much of each into the room: the guitar less, a pluck wants to be
+        // dry, and in STARFALL's big room it lifted the reverb 7 dB.
+        static constexpr std::array<float, 4> strumRoom { 1.0f, 1.0f, 0.65f, 0.25f };   // kept the room where it was when the trims went up   // the strum about level with it (0.30 was 9 dB over)
         float pluckPan = 0.5f;
         std::array<JunoVoice, 4> pad;
         std::array<Ensemble, 2> padChorus;

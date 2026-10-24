@@ -376,6 +376,16 @@ namespace np::audio
         return pad;
     }
 
+    /** Which Omnichord voice (VoiceSpec.h) a song strums with (2026-10-24):
+        PULSE the harp — its arpeggio is already the OMNI pluck — ACID the
+        vibraphone and STARFALL the guitar (swapped by ear the same day).
+        hitBank is the song's own index. */
+    inline int strumVoice (const Song& s) noexcept
+    {
+        static constexpr int voices[3] { 1, 2, 3 };
+        return voices[std::clamp (s.hitBank, 0, 2)];
+    }
+
     /** The drone (2026-10-24): saw and pulse with a slow PWM and a little
         sub, a slow swell and a long release, kept dark by its filter. */
     inline const JunoPatch& dronePatch() noexcept
