@@ -31,7 +31,7 @@ namespace
 
     // Input is driven off a clock in samples, delivered only at multiples of
     // 256 so both block sizes see each command at the same sample.
-    Run play (int songIndex, int blockSize, double seconds, int busMask = Conductor::busAll)
+    Run play (int songIndex, int blockSize, double seconds, int busMask = Conductor::busAll, bool full = false)
     {
         auto c = std::make_unique<Conductor>();
         c->prepare (kRate);
@@ -43,7 +43,9 @@ namespace
         run.right.resize ((size_t) total);
 
         c->requestedChord = 0;
+        c->endless = true;   // as in the 3D game: the songs run on, and eight layers need longer
         c->post ({ Command::start, songIndex });
+        if (full) c->post ({ Command::setLayer, maxLayer (song (songIndex)) });
 
         std::uint32_t rng = 12345u;
         auto rnd = [&rng] { rng = rng * 1664525u + 1013904223u; return (rng >> 8) / 16777216.0f; };
@@ -150,7 +152,7 @@ int main (int argc, char** argv)
     for (int s = 0; s < kNumSongs; ++s)
     {
         const auto& sg = song (s);
-        const double seconds = 125.0;
+        const double seconds = 165.0;
         std::printf ("%s (%s, %.0f BPM)\n", sg.name, sg.tagline, sg.bpm);
 
         const auto a = play (s, 256, seconds);
@@ -236,7 +238,7 @@ int main (int argc, char** argv)
         // one phrase earlier.
         if (song (s).buildUps)
         {
-            const auto dr = play (s, 256, 100.0, Conductor::busDrums);
+            const auto dr = play (s, 256, 140.0, Conductor::busDrums);   // long enough for the clap, now layer 7
             const double barSec = 240.0 / song (s).bpm;
             auto rms = [&dr, barSec] (double barFrom, double barTo)
             {
@@ -282,7 +284,7 @@ int main (int argc, char** argv)
 
             // The pad rising with the riser: a half bar at a time through the
             // sweep, then the first bar it is in for real.
-            const auto pd = play (s, 256, 90.0, Conductor::busPad);
+            const auto pd = play (s, 256, 140.0, Conductor::busPad);
             std::printf ("  pad through the riser (dB per half bar from bar %d):", padBar - 2);
             for (double b = padBar - 2; b < padBar + 1.0; b += 0.5)
             {
@@ -402,6 +404,24 @@ int main (int argc, char** argv)
             std::printf (" %s %.1f/%.1f", busNames[bus], dB (std::sqrt (sum / (2.0 * (to - from)))), dB (pk));
         }
         std::printf ("  (RMS/peak dB)\n");
+
+        // The drone and the strum (2026-10-24) against the pad, every layer in from the start.
+        {
+            std::printf ("  full layers, 10-25 s:");
+            static const int busList[3] { Conductor::busPad, Conductor::busDrone, Conductor::busStrum };
+            static const char* listNames[3] { "pad", "drone", "strum" };
+            for (int k = 0; k < 3; ++k)
+            {
+                const auto solo = play (s, 256, 25.0, busList[k], true);
+                double sum = 0.0;
+                const size_t from = (size_t) (10.0 * kRate), to = solo.left.size();
+                for (size_t i = from; i < to; ++i) sum += solo.left[i] * solo.left[i] + solo.right[i] * solo.right[i];
+                const double db = dB (std::sqrt (sum / (2.0 * (to - from))));
+                std::printf (" %s %.1f", listNames[k], db);
+                if (db < -60.0) fail ("a new layer is silent");
+            }
+            std::printf (" dB RMS\n");
+        }
 
         writeWav (outDir + "/neonpuls-" + std::to_string (s + 1) + ".wav", a);
     }

@@ -107,7 +107,8 @@ namespace np::audio
 
         /** Which buses reach the output. For measuring one bus alone (the
             offline test does), never touched in the game. */
-        enum Bus { busDrums = 1, busBass = 2, busArp = 4, busHits = 8, busPad = 16, busWet = 32, busSlowNoise = 64, busAll = 127 };
+        enum Bus { busDrums = 1, busBass = 2, busArp = 4, busHits = 8, busPad = 16, busWet = 32, busSlowNoise = 64,
+                   busDrone = 128, busStrum = 256, busAll = 511 };
         int busMask = busAll;
 
         /** Beats since the song started, with the fraction — for visuals. */
@@ -134,6 +135,8 @@ namespace np::audio
 
             junoBass.prepare (sampleRate);
             for (auto& p : plucks) p.prepare (sampleRate);
+            for (auto& p : strumVoices) p.prepare (sampleRate);
+            for (auto& v : drone) { v.prepare (sampleRate); v.setPatch (dronePatch()); }
             for (auto& v : pad) v.prepare (sampleRate);
             for (auto& e : padChorus) { e.prepare (sampleRate); e.setRate (0.5f); e.setMix (0.5f); }
 
@@ -246,6 +249,8 @@ namespace np::audio
             bassOffset = 0.0f;
             slowOn = pendingBomb = false;
             pendingTower = 0;
+            strumIndex = 8;
+            lastStrumTick = -1000;
             slowTarget = 0.0f;
             slowOctave = kSlowOpen;
             slowL.reset(); slowR.reset();
@@ -440,6 +445,8 @@ namespace np::audio
             if (! running)
                 return;
 
+            strumTick (k);
+
             if (pendingBomb)
             {
                 pendingBomb = false;
@@ -477,11 +484,16 @@ namespace np::audio
             {
                 // The wheel is read here and only here.
                 const int want = std::clamp (requestedChord.load (std::memory_order_relaxed), 0, 3);
-                if (want != chord)
+                const bool changed = want != chord;
+                if (changed)
                 {
                     chord = want;
                     postEvent ({ Event::chord, chord });
                 }
+
+                droneUpdate();
+                if (partOn (Part::strum) && ! dropped && (changed || (t == 0 && bar % 2 == 0)) && k - lastStrumTick >= kTicksPerBeat)
+                    startStrum (k);
 
                 if (! dropped)
                 {
@@ -1001,7 +1013,67 @@ namespace np::audio
             }
         }
 
-        void padOff() noexcept { for (auto& v : pad) v.noteOff(); }
+        /** Everything held lets go: the pad and the drone. */
+        void padOff() noexcept
+        {
+            for (auto& v : pad) v.noteOff();
+            for (auto& v : drone) v.noteOff();
+        }
+
+        //======================================================================
+        // The drone (2026-10-24): root, fifth and octave held low and soft,
+        // changing only the notes that change when the chord does.
+        void droneUpdate() noexcept
+        {
+            if (! partOn (Part::drone) || dropped)
+            {
+                for (auto& v : drone) if (v.isGateOn()) v.noteOff();
+                return;
+            }
+            const int root = placeAbove (rootPc (chord), 45);
+            const int notes[3] { root, root + 7, root + 12 };
+            for (int i = 0; i < 3; ++i)
+            {
+                auto& v = drone[(size_t) i];
+                if (v.isGateOn() && v.midiNote() == notes[i]) continue;
+                v.noteOff();
+                v.noteOn (notes[i], 0.7f, 0, ++order);
+            }
+        }
+
+        // The strum (2026-10-24): an Omnichord sweep up eight chord tones,
+        // a 32nd apart, left to right, ringing long. On every chord change
+        // and every other downbeat while its layer is in.
+        void startStrum (std::int64_t k) noexcept
+        {
+            const int root = placeAbove (rootPc (chord), 55);
+            const int third = chordThird (chord);
+            const int tones[8] { 0, third, 7, 12, 12 + third, 19, 24, 24 + third };
+            for (int i = 0; i < 8; ++i) strumNotes[(size_t) i] = root + tones[i];
+            strumStart = k;
+            strumIndex = 0;
+            lastStrumTick = k;
+        }
+
+        void strumTick (std::int64_t k) noexcept
+        {
+            while (strumIndex < 8 && k >= strumStart + strumIndex)
+            {
+                auto* v = &strumVoices[0];
+                std::uint64_t oldest = ~(std::uint64_t) 0;
+                for (auto& p : strumVoices)
+                {
+                    if (! p.isActive()) { v = &p; break; }
+                    if (p.age() < oldest) { oldest = p.age(); v = &p; }
+                }
+                const int note = strumNotes[(size_t) strumIndex];
+                const float hz = 440.0f * std::pow (2.0f, (float) (note - 69) / 12.0f);
+                const float ring = std::pow (0.001f, 1.0f / (float) (sampleRate * 3.5));
+                v->start (hz, 0.55f + 0.04f * (float) strumIndex, ring, voiceSpec (0), 0, ++order);
+                strumPan[(size_t) (v - strumVoices.data())] = 0.2f + 0.6f * (float) strumIndex / 7.0f;
+                ++strumIndex;
+            }
+        }
 
         //======================================================================
         void renderSegment (float* outL, float* outR, int n) noexcept
@@ -1175,8 +1247,31 @@ namespace np::audio
                 // In slow motion everything is sent to the room harder, up to
                 // 2.5 times, so the mix sounds big and far away.
                 const float send = current->reverbSend * (1.0f + 1.5f * slowDepth);
-                reverb.process ((al + hl * 0.8f + pdl * 0.6f) * send,
-                                (ar + hr * 0.8f + pdr * 0.6f) * send, wl, wr);
+                // Drone ---------------------------------------------------------
+                droneL = droneR = 0.0f;
+                {
+                    static constexpr float pans[3] { 0.5f, 0.3f, 0.7f };
+                    for (size_t k = 0; k < drone.size(); ++k)
+                    {
+                        if (! drone[k].isActive()) continue;
+                        const float x = drone[k].process (0.0f, 0.30f, 0.10f, 1.0f);
+                        droneL += x * std::cos (pans[k] * 1.5707963f);
+                        droneR += x * std::sin (pans[k] * 1.5707963f);
+                    }
+                }
+
+                // Strum ---------------------------------------------------------
+                strumL = strumR = 0.0f;
+                for (size_t k = 0; k < strumVoices.size(); ++k)
+                {
+                    if (! strumVoices[k].isActive()) continue;
+                    const float x = strumVoices[k].process();
+                    strumL += x * std::cos (strumPan[k] * 1.5707963f);
+                    strumR += x * std::sin (strumPan[k] * 1.5707963f);
+                }
+
+                reverb.process ((al + hl * 0.8f + pdl * 0.6f + droneL * 0.5f + strumL * 0.7f) * send,
+                                (ar + hr * 0.8f + pdr * 0.6f + droneR * 0.5f + strumR * 0.7f) * send, wl, wr);
 
                 // Mix ---------------------------------------------------------------
                 const float duckBass = 1.0f - 0.55f * pump;
@@ -1195,6 +1290,14 @@ namespace np::audio
 
                 float l = (dl + rl * duckRiser) * gDrums + bass * gBass + pdl * gPad + wl * gWet;
                 float r = (dr + rr * duckRiser) * gDrums + bass * gBass + pdr * gPad + wr * gWet;
+
+                // Drone and strum: music, so under the slow filter too.
+                {
+                    const float gDrone = (busMask & busDrone) ? kDrone * (1.0f - 0.35f * pump) : 0.0f;
+                    const float gStrum = (busMask & busStrum) ? kStrum * (1.0f - 0.25f * pump) : 0.0f;
+                    l += droneL * gDrone + strumL * gStrum;
+                    r += droneR * gDrone + strumR * gStrum;
+                }
 
                 // Slow motion: everything but the arpeggio and the death sounds
                 // goes through a resonant lowpass that sweeps down while
@@ -1320,6 +1423,15 @@ namespace np::audio
         bool pendingSlide = false;
         JunoVoice junoBass;
         std::array<PluckVoice, 8> plucks;
+        std::array<PluckVoice, 12> strumVoices;
+        std::array<float, 12> strumPan {};
+        std::array<int, 8> strumNotes {};
+        std::int64_t strumStart = 0, lastStrumTick = -1000;
+        int strumIndex = 8;
+        std::array<JunoVoice, 3> drone;
+        float droneL = 0.0f, droneR = 0.0f, strumL = 0.0f, strumR = 0.0f;
+        static constexpr float kDrone = 0.34f;   // levels set against the pad by tools/audiotest: drone ~4 dB under it,
+        static constexpr float kStrum = 0.11f;   // the strum about level with it (0.30 was 9 dB over)
         float pluckPan = 0.5f;
         std::array<JunoVoice, 4> pad;
         std::array<Ensemble, 2> padChorus;

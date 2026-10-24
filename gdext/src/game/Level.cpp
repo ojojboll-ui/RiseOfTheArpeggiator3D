@@ -42,20 +42,21 @@ namespace np
         // av de tre andra"), the chorus above it, the verse below left and
         // the bridge below right, each joined to it by a passage; the rooms
         // meet only there. Laid out in the old units and made half as big
-        // again (kScale, 2026-10-24): rooms 33 x 28.5 m, the middle 36 m
-        // square, passages 6 m wide.
+        // again (kScale, 2026-10-24): rooms 33 x 28.5 m, the middle 27 m
+        // square (36 at first, "krymp ringarna och det rummet"), passages
+        // 6 m wide.
         auto R = [] (float x0, float y0, float x1, float y1) { return Rect { x0 * kScale, y0 * kScale, x1 * kScale, y1 * kScale }; };
         w = 7400.0f * kScale;
         h = 6000.0f * kScale;
-        hubRect = R (2500.0f, 2300.0f, 4900.0f, 4700.0f);
+        hubRect = R (2800.0f, 2600.0f, 4600.0f, 4400.0f);
         roomList[1] = { R (2600.0f, 200.0f,  4800.0f, 2100.0f), 1, false, true  };   // chorus: walls
         roomList[0] = { R (200.0f,  3900.0f, 2400.0f, 5800.0f), 0, true,  false };   // verse: hills
         roomList[2] = { R (5000.0f, 3900.0f, 7200.0f, 5800.0f), 2, true,  true  };   // bridge: both
 
         passageList = {
-            R (3500.0f, 2100.0f, 3900.0f, 2300.0f),    // chorus - middle
-            R (2400.0f, 4100.0f, 2500.0f, 4500.0f),    // verse - middle
-            R (4900.0f, 4100.0f, 5000.0f, 4500.0f),    // middle - bridge
+            R (3500.0f, 2100.0f, 3900.0f, 2600.0f),    // chorus - middle
+            R (2400.0f, 3950.0f, 2800.0f, 4350.0f),    // verse - middle
+            R (4600.0f, 3950.0f, 5000.0f, 4350.0f),    // middle - bridge
             hubRect };
 
         const Rect& verse = roomList[0].r;
@@ -68,7 +69,7 @@ namespace np
         gatePos = hubRect.centre();
         for (int d = 0; d < kDoors; ++d)
         {
-            doorRadii[(size_t) d] = (960.0f - 140.0f * (float) d) * kScale;
+            doorRadii[(size_t) d] = (680.0f - 100.0f * (float) d) * kScale;   // 960 - 140 d at first
             doorIsOpen[(size_t) d] = false;
         }
 

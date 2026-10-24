@@ -33,8 +33,11 @@ namespace np::audio
         there, and anything not listed (the bass, on songs 2-3) is there from
         the start. Per song since 2026-10-09, when song 1 began with the kick
         alone. */
-    enum class Part { bass, hat, sixteenths, openHat, pad, clap };
-    struct Arrangement { int count; std::array<Part, 6> parts; };
+    /** Since 2026-10-24 also a soft drone before the open hat and a long
+        Omnichord strum after the clap ("lägg en soft drone innan open hihat
+        och lägg till en lång omnichord strum efter clap"). */
+    enum class Part { bass, hat, sixteenths, openHat, pad, clap, drone, strum };
+    struct Arrangement { int count; std::array<Part, 8> parts; };
 
     /** How each kind of enemy sounds when it dies, indexed like np::EnemyKind:
         wanderer, seeker, dodger, splitter, shard, well. `automatic` keeps the
@@ -163,7 +166,7 @@ namespace np::audio
               0, 80, 0.22f, 0.38f, 1, 0.22f, true, true,             // 80 bars: a minute shorter (2026-10-09)
               { 4, 0x1249u, 0.50f },                                     // GATE PUNKT: steps 0 3 6 9 12 over four beats
               -1, 1.26f,                                                 // an octave lower and +2 dB, 2026-10-08
-              { 6, {{ Part::bass, Part::hat, Part::sixteenths, Part::openHat, Part::pad, Part::clap }} },   // the kick alone first
+              { 8, {{ Part::bass, Part::hat, Part::sixteenths, Part::drone, Part::openHat, Part::pad, Part::clap, Part::strum }} },   // the kick alone first
               true, true,
               {{ KillSound::pling, KillSound::ton, KillSound::acid, KillSound::stab, KillSound::glass, KillSound::chord }} },
 
@@ -183,7 +186,7 @@ namespace np::audio
               1, 80, 0.18f, 0.30f, 0, 0.16f, true, true,             // 80 bars: a minute shorter (2026-10-09)
               { 2, 0x49u, 1.20f },                                       // SYNKOP 3-3-2: steps 0, 3, 6
               0, 1.0f,
-              { 6, {{ Part::bass, Part::hat, Part::sixteenths, Part::openHat, Part::pad, Part::clap }} },   // the kick alone first
+              { 8, {{ Part::bass, Part::hat, Part::sixteenths, Part::drone, Part::openHat, Part::pad, Part::clap, Part::strum }} },   // the kick alone first
               true, true,
               // pinwheel 303 zap, diamond horn blip, dodger 303 squelch,
               // splitter two-note guitar pluck, shard glass, well chord
@@ -209,7 +212,7 @@ namespace np::audio
               // hard (2026-10-09); the pump now comes from a deeper sidechain.
               { 1, 0x1u, 0.0f, true },
               0, 1.2f,                                                   // +1.6 dB: makes up the level the sub octave took with it
-              { 6, {{ Part::bass, Part::hat, Part::sixteenths, Part::openHat, Part::pad, Part::clap }} },   // the kick alone first
+              { 8, {{ Part::bass, Part::hat, Part::sixteenths, Part::drone, Part::openHat, Part::pad, Part::clap, Part::strum }} },   // the kick alone first
               true, true,
               // pinwheel vibraphone, diamond Juno pluck, dodger harp,
               // splitter a glassy three-note shimmer, shard a high bell, well chord
@@ -242,6 +245,8 @@ namespace np::audio
             case Part::openHat:    return "OPEN HAT";
             case Part::pad:        return "PAD";
             case Part::clap:       return "CLAP";
+            case Part::drone:      return "DRONE";
+            case Part::strum:      return "STRUM";
         }
         return "";
     }
@@ -369,6 +374,14 @@ namespace np::audio
         // Sub octave off since 2026-10-08: it was what rumbled.
         static const JunoPatch pad { "PAD", 0.80f,0.45f,0.00f,0.00f, 0.50f,0.35f,0.45f, 0.22f,0.30f,0.05f, 0.55f,1.20f,0.80f,1.40f, 0.55f, 0.0f,0.0f,0 };
         return pad;
+    }
+
+    /** The drone (2026-10-24): saw and pulse with a slow PWM and a little
+        sub, a slow swell and a long release, kept dark by its filter. */
+    inline const JunoPatch& dronePatch() noexcept
+    {
+        static const JunoPatch p { "DRONE", 0.55f,0.50f,0.30f,0.00f, 0.45f,0.45f,0.25f, 0.10f,0.20f,0.10f, 1.80f,1.50f,1.00f,2.50f, 0.60f, 0.0f,0.0f,0 };
+        return p;
     }
 
     /** Chordtroller's STOT, short: the splitter's two-note stab. */
