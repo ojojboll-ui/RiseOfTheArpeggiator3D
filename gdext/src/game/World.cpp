@@ -62,6 +62,7 @@ namespace np
     {
         constexpr float kSparkGravity = 1800.0f;
         constexpr float kSlopePull = 750.0f;      // how hard hills roll enemies down, units/s² per unit of slope (520 until the hills grew)
+        constexpr float kEnemyMaxPull = 80.0f;    // ...capped, so every enemy still gets up every hill (2026-10-24)
         constexpr float kTowerHp = 160.0f;        // hits: about fifteen seconds of the arpeggio at 1/8; the second wave's
         constexpr float kFirstWaveHp = 80.0f;     // half as many for the first three (2026-10-20)
         constexpr float kRiseSeconds = 1.5f;
@@ -731,7 +732,7 @@ namespace np
             // Hills (stronger since 2026-10-24): slower up, faster down, for
             // whatever way the enemy means to go.
             const Vec2 slopeHere = lvl.slope (e.pos);
-            auto hill = [&] (Vec2 dir) { return std::clamp (1.0f - dot (slopeHere, dir) * 1.6f, 0.45f, 1.6f); };
+            auto hill = [&] (Vec2 dir) { return std::clamp (1.0f - dot (slopeHere, dir) * 1.2f, 0.6f, 1.6f); };
 
             switch (e.kind)
             {
@@ -824,7 +825,13 @@ namespace np
             }
 
             // Hills roll everything a little downhill.
-            e.vel -= lvl.slope (e.pos) * (kSlopePull * dt);
+            {
+                // Downhill roll, too weak to stop a climb: at least 60% of an
+                // enemy's speed is left going up the steepest slope.
+                Vec2 pull = slopeHere * kSlopePull;
+                if (pull.length() > kEnemyMaxPull) pull = pull.normalised() * kEnemyMaxPull;
+                e.vel -= pull * dt;
+            }
 
             e.pos += e.vel * dt;
 
