@@ -545,7 +545,7 @@ PackedByteArray ArpGame::floor_info_bytes() const
     const np::World* w = view();
     std::array<np::Color, 3> zones;
     for (int z = 0; z < 3; ++z) zones[(size_t) z] = np::zoneColor (w->levelIndex(), z);
-    const auto info = w->ground().floorInfo (zones);
+    const auto info = w->ground().floorInfo (zones, np::levelAccent (w->levelIndex()));
     PackedByteArray out;
     out.resize ((int64_t) info.size());
     std::memcpy (out.ptrw(), info.data(), info.size());
@@ -634,10 +634,10 @@ Array ArpGame::door_states() const
     for (int i = 0; i < np::Level::kDoors; ++i)
     {
         const auto& door = w->doorList()[(size_t) i];
-        const auto& r = w->ground().doorRect (i);
         Dictionary d;
-        d["rect"] = Rect2 (r.x0 * kScale, r.y0 * kScale, r.width() * kScale, r.height() * kScale);
-        d["ground"] = place (r.centre(), 0.0f).y;
+        d["centre"] = place (w->ground().gate(), 0.0f);
+        d["radius"] = w->ground().doorRadius (i) * kScale;
+        d["thickness"] = np::Level::kDoorThickness * kScale;
         d["zone"] = door.zone;
         Array bars;
         for (bool b : door.bars) bars.push_back (b);

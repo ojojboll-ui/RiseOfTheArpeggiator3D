@@ -22,10 +22,10 @@
     hills are a coarser grid of heights cut into triangles, so they come out
     faceted, lowpoly, and the game and the floor shader agree on every height.
 
-    The way out is at the very top (2026-10-20): a corridor north of the
-    chorus, shut by six doors one behind the other, two in each zone's
-    colour. Each zone has six places for towers, three for its first wave
-    and three for its second.
+    The way out is in a room in the middle of the three (2026-10-24): the
+    exit at its centre inside six round doors of different sizes, two in
+    each zone's colour. Each zone has six places for towers; the game uses
+    one per wave.
 */
 namespace np
 {
@@ -76,8 +76,11 @@ namespace np
 
         /** The exit corridor and its doors, bottom (nearest the chorus) to top.
             Door d is in zone d % 3's colour. */
-        const Rect& exitCorridor() const { return exitRect; }
-        const Rect& doorRect (int d) const { return doorList[(size_t) d]; }
+        /** The middle room, and the radius of each round door round the exit
+            at its centre, outermost first. */
+        const Rect& hub() const { return hubRect; }
+        float doorRadius (int d) const { return doorRadii[(size_t) d]; }
+        static constexpr float kDoorThickness = 60.0f;
         bool doorOpen (int d) const { return doorIsOpen[(size_t) d]; }
         void openDoor (int d);
         /** Counts every change to what is solid, so way-finding knows to look again. */
@@ -130,7 +133,7 @@ namespace np
 
         /** For drawing the floor: 20-unit cells as RGBA, rgb the zone's colour
             (blended along the passages), a 255 on open floor. */
-        std::vector<std::uint8_t> floorInfo (const std::array<Color, 3>& zoneColors) const;
+        std::vector<std::uint8_t> floorInfo (const std::array<Color, 3>& zoneColors, Color hubColor) const;
         int columns() const { return cols; }
         int rowCount() const { return rows; }
 
@@ -148,8 +151,9 @@ namespace np
         std::vector<Segment> rimList;
         std::array<std::array<Vec2, kTowerSpots>, 3> towerSpots {};
         Vec2 startPos, gatePos;
-        Rect exitRect;
-        std::array<Rect, kDoors> doorList {};
+        Rect hubRect;
+        std::array<float, kDoors> doorRadii {};
+        void carveRing (float radius, Cell type);
         std::array<bool, kDoors> doorIsOpen {};
         int rev = 0;
 

@@ -15,11 +15,12 @@ GDExtension; Godot draws the world.
 song with its own four chords: the **verse** (hills and valleys), the
 **chorus** (walls) and the **bridge** (both). Flying into a room changes the
 section on the next bar. Each room has a tower in its colour; when all three
-are down, three stronger ones rise, one in each room again. The way out is a
-corridor at the top shut by six doors, two in each room's colour, and every
-tower that falls takes away one of them. Through the last door is the exit:
-fly into it for the next song — PULSE, then ACID, then STARFALL — with your
-score, lives and bombs.
+are down, three stronger ones rise, one in each room again. The way out is in
+a room in the middle of the three: the exit at its centre inside six round
+doors of different sizes, two in each room's colour, and every tower that
+falls takes away one of them. Through the last ring is the exit: fly into it
+for the next song — PULSE, then ACID, then STARFALL — with your score, lives
+and bombs.
 
 The ship is a hovercraft: it carries its momentum and slides through turns,
 and hills slow it going up and speed it going down — enemies too. Shooting

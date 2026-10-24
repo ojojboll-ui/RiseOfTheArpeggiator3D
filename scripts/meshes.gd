@@ -269,6 +269,21 @@ static func gate(outer: float, inner: float, depth: float) -> ArrayMesh:
 	return _merge_runs(faces, 6)
 
 
+## A low round wall, in metres: an annulus of `radius` (to its middle) and
+## `thickness`, from y0 to y1, round the origin.
+static func ring_wall(radius: float, thickness: float, y0: float, y1: float, segments := 48) -> ArrayMesh:
+	var faces := []
+	var ro := radius + thickness * 0.5
+	var ri := radius - thickness * 0.5
+	for i in segments:
+		var a0 := TAU * i / segments
+		var a1 := TAU * (i + 1) / segments
+		var d0 := Vector2(cos(a0), sin(a0))
+		var d1 := Vector2(cos(a1), sin(a1))
+		faces.append_array(prism_faces(PackedVector2Array([d0 * ro, d1 * ro, d1 * ri, d0 * ri]), y0, y1))
+	return _merge_runs(faces, 6)
+
+
 ## A box from corner to corner, in metres.
 static func box(lo: Vector3, hi: Vector3) -> Array:
 	var outline := PackedVector2Array([Vector2(lo.x, lo.z), Vector2(hi.x, lo.z), Vector2(hi.x, hi.z), Vector2(lo.x, hi.z)])

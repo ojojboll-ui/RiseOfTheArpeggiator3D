@@ -921,9 +921,11 @@ namespace np
             const int d = t.wave * 3 + t.zone;
             lvl.openDoor (d);
             grid.holdWhere ([this] (Vec2 p) { return lvl.solid (p); });
-            const Vec2 at = lvl.doorRect (d).centre();
-            rings.push_back ({ at, 40.0f, 1200.0f, 0.8f, c });
-            explode (at, c, { 1, 1, 1 }, 160, 900.0f, 1.4f, 1.2f);
+            // The circle bursts outward where it stood.
+            const float rad = lvl.doorRadius (d);
+            rings.push_back ({ lvl.gate(), rad, 900.0f, 0.8f, c });
+            for (int k = 0; k < 12; ++k)
+                explode (lvl.gate() + fromAngle (kTau * (float) k / 12.0f, rad), c, { 1, 1, 1 }, 14, 700.0f, 1.2f, 1.2f);
             const int left = doorsLeft();
             if (left > 0)
                 say (left == 1 ? "A DOOR OPENS  ·  1 LEFT" : "A DOOR OPENS  ·  " + std::to_string (left) + " LEFT", 2.2f, c);

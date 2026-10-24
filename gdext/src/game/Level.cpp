@@ -38,40 +38,39 @@ namespace np
     {
         const int variant = ((levelIndex % 3) + 3) % 3;
 
-        // The triangle: chorus at the top, verse bottom left, bridge bottom
-        // right, and above the chorus the corridor out. Everything was made
-        // half as big again in every direction on 2026-10-24 (kScale) — the
-        // passages too, "lika rymliga som den nya storleken" — with no more
-        // walls and the same number of enemies, so the game breathes more:
-        // rooms 33 x 28.5 m, passages 6 m wide and 12 m long, the exit
-        // corridor 9 m wide and 18 m long.
+        // The exit room in the middle (2026-10-24, "det rummet är i mitten
+        // av de tre andra"), the chorus above it, the verse below left and
+        // the bridge below right, each joined to it by a passage; the rooms
+        // meet only there. Laid out in the old units and made half as big
+        // again (kScale, 2026-10-24): rooms 33 x 28.5 m, the middle 36 m
+        // square, passages 6 m wide.
         auto R = [] (float x0, float y0, float x1, float y1) { return Rect { x0 * kScale, y0 * kScale, x1 * kScale, y1 * kScale }; };
-        w = 5600.0f * kScale;
-        h = 6200.0f * kScale;
-        exitRect = R (2500.0f, 200.0f, 3100.0f, 1400.0f);
-        roomList[1] = { R (1700.0f, 1400.0f, 3900.0f, 3300.0f), 1, false, true  };   // chorus: walls
-        roomList[0] = { R (200.0f,  4100.0f, 2400.0f, 6000.0f), 0, true,  false };   // verse: hills
-        roomList[2] = { R (3200.0f, 4100.0f, 5400.0f, 6000.0f), 2, true,  true  };   // bridge: both
+        w = 7400.0f * kScale;
+        h = 6000.0f * kScale;
+        hubRect = R (2500.0f, 2300.0f, 4900.0f, 4700.0f);
+        roomList[1] = { R (2600.0f, 200.0f,  4800.0f, 2100.0f), 1, false, true  };   // chorus: walls
+        roomList[0] = { R (200.0f,  3900.0f, 2400.0f, 5800.0f), 0, true,  false };   // verse: hills
+        roomList[2] = { R (5000.0f, 3900.0f, 7200.0f, 5800.0f), 2, true,  true  };   // bridge: both
 
         passageList = {
-            R (2400.0f, 4850.0f, 3200.0f, 5250.0f),    // verse - bridge
-            R (1950.0f, 3300.0f, 2350.0f, 4100.0f),    // verse - chorus
-            R (3250.0f, 3300.0f, 3650.0f, 4100.0f),    // bridge - chorus
-            exitRect };
+            R (3500.0f, 2100.0f, 3900.0f, 2300.0f),    // chorus - middle
+            R (2400.0f, 4100.0f, 2500.0f, 4500.0f),    // verse - middle
+            R (4900.0f, 4100.0f, 5000.0f, 4500.0f),    // middle - bridge
+            hubRect };
 
         const Rect& verse = roomList[0].r;
         const Rect& chorus = roomList[1].r;
         const Rect& bridge = roomList[2].r;
 
-        // Six doors up the corridor, two cells thick, in zone order from the
-        // chorus end: verse, chorus, bridge, verse, chorus, bridge.
+        // The exit at the centre of the middle room, inside six round doors
+        // of different sizes, outermost first: the first wave's verse,
+        // chorus and bridge doors, then the second wave's.
+        gatePos = hubRect.centre();
         for (int d = 0; d < kDoors; ++d)
         {
-            const float y = exitRect.y1 - (160.0f + (float) d * 150.0f) * kScale;
-            doorList[(size_t) d] = { exitRect.x0, y - 20.0f, exitRect.x1, y + 20.0f };
+            doorRadii[(size_t) d] = (960.0f - 140.0f * (float) d) * kScale;
             doorIsOpen[(size_t) d] = false;
         }
-        gatePos = { exitRect.centre().x, exitRect.y0 + 160.0f * kScale };
 
         // Walls: a layout per level.
         wallList.clear();
@@ -117,7 +116,7 @@ namespace np
         for (const auto& r : roomList) carve (r.r, open);
         for (const auto& p : passageList) carve (p, open);
         for (const auto& wl : wallList) carve (wl, wall);
-        for (const auto& d : doorList) carve (d, door);
+        for (int d = 0; d < kDoors; ++d) carveRing (doorRadii[(size_t) d], door);
         buildRim();
         ++rev;
 
@@ -160,8 +159,26 @@ namespace np
     {
         if (d < 0 || d >= kDoors || doorIsOpen[(size_t) d]) return;
         doorIsOpen[(size_t) d] = true;
-        carve (doorList[(size_t) d], open);
+        carveRing (doorRadii[(size_t) d], open);
         ++rev;
+    }
+
+    void Level::carveRing (float radius, Cell type)
+    {
+        const float half = kDoorThickness * 0.5f;
+        const int c0 = std::max (0, (int) ((gatePos.x - radius - half) / kCell) - 1);
+        const int c1 = std::min (cols - 1, (int) ((gatePos.x + radius + half) / kCell) + 1);
+        const int r0 = std::max (0, (int) ((gatePos.y - radius - half) / kCell) - 1);
+        const int r1 = std::min (rows - 1, (int) ((gatePos.y + radius + half) / kCell) + 1);
+        for (int r = r0; r <= r1; ++r)
+            for (int c = c0; c <= c1; ++c)
+            {
+                const Vec2 p { ((float) c + 0.5f) * kCell, ((float) r + 0.5f) * kCell };
+                if (std::abs ((p - gatePos).length() - radius) > half) continue;
+                auto& cell = cells[(size_t) (r * cols + c)];
+                if (cell == voidCell || cell == wall) continue;
+                cell = type;
+            }
     }
 
     Vec2 Level::placeClear (Vec2 want, float clearance) const
@@ -468,7 +485,7 @@ namespace np
 
     //==========================================================================
 
-    std::vector<std::uint8_t> Level::floorInfo (const std::array<Color, 3>& zoneColors) const
+    std::vector<std::uint8_t> Level::floorInfo (const std::array<Color, 3>& zoneColors, Color hubColor) const
     {
         std::vector<std::uint8_t> out ((size_t) (cols * rows * 4), 0);
         for (int r = 0; r < rows; ++r)
@@ -478,18 +495,19 @@ namespace np
                 if (cell == voidCell) continue;
                 const Vec2 p { ((float) c + 0.5f) * kCell, ((float) r + 0.5f) * kCell };
 
-                // Inside a room its colour; in a passage, the two rooms it joins
-                // blended by how near each is.
+                // Inside a room its colour, the middle its own; in a passage,
+                // the room's colour fading into the middle's.
                 Color col;
                 const int zone = zoneAt (p);
                 if (zone >= 0) col = zoneColors[(size_t) zone];
+                else if (hubRect.contains (p)) col = hubColor;
                 else
                 {
-                    std::array<std::pair<float, int>, 3> near {};
-                    for (int z = 0; z < 3; ++z) near[(size_t) z] = { distanceTo (roomList[(size_t) z].r, p), z };
-                    std::sort (near.begin(), near.end());
-                    const float t = near[0].first / std::max (1.0f, near[0].first + near[1].first);
-                    col = mix (zoneColors[(size_t) near[0].second], zoneColors[(size_t) near[1].second], t);
+                    int nearest = 0;
+                    for (int z = 1; z < 3; ++z)
+                        if (distanceTo (roomList[(size_t) z].r, p) < distanceTo (roomList[(size_t) nearest].r, p)) nearest = z;
+                    const float dRoom = distanceTo (roomList[(size_t) nearest].r, p), dHub = distanceTo (hubRect, p);
+                    col = mix (zoneColors[(size_t) nearest], hubColor, dRoom / std::max (1.0f, dRoom + dHub));
                 }
 
                 std::uint8_t* px = &out[(size_t) ((r * cols + c) * 4)];

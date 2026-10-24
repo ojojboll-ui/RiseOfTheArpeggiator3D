@@ -194,8 +194,8 @@ func _draw_map(at: Vector2, width: float) -> void:
 	for door in data.doors:
 		if door.open:
 			continue
-		var r: Rect2 = door.rect
-		draw_line(at + Vector2(r.position.x, r.get_center().y) * s, at + Vector2(r.end.x, r.get_center().y) * s, door.color, 2.0)
+		var c3: Vector3 = door.centre
+		draw_arc(at + Vector2(c3.x, c3.z) * s, float(door.radius) * s, 0, TAU, 32, door.color, 1.5, true)
 	var g: Dictionary = data.gate
 	var gp: Vector3 = g.pos
 	var gq := at + Vector2(gp.x, gp.z) * s

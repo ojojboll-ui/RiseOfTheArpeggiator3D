@@ -339,30 +339,21 @@ func _build_level() -> void:
 	# zone's colour. A bar goes with every tower of its wave that falls.
 	door_bars.clear()
 	door_mats.clear()
+	# Round doors round the exit (2026-10-24): a low circular wall each, of
+	# its own size, in its zone's colour.
 	for door in game.door_states():
-		var r: Rect2 = door.rect
-		var g: float = door.ground
 		var mat := _neon_material(false)
 		mat.set_shader_parameter("base_color", door.color)
-		mat.set_shader_parameter("body_energy", 0.5)
-		mat.set_shader_parameter("edge_energy", 2.5)
-		mat.set_shader_parameter("albedo_amount", 0.1)
-		var post_faces := []
-		for x in [r.position.x - 0.12, r.end.x]:
-			post_faces.append_array(Meshes.box(Vector3(x, g - 0.5, r.position.y - 0.04), Vector3(x + 0.12, g + 1.3, r.end.y + 0.04)))
-		var posts := MeshInstance3D.new()
-		posts.mesh = Meshes._merge_runs(post_faces, 6)
-		posts.material_override = mat
-		level_root.add_child(posts)
-		var bars := []
-		for k in 3:
-			var y := g + 0.3 + 0.36 * k
-			var bar := MeshInstance3D.new()
-			bar.mesh = Meshes.solid(Meshes.box(Vector3(r.position.x, y, r.position.y + 0.08), Vector3(r.end.x, y + 0.1, r.end.y - 0.08)))
-			bar.material_override = mat
-			level_root.add_child(bar)
-			bars.push_back(bar)
-		door_bars.push_back(bars)
+		# Each segment's edges glow, so they are kept faint: the ring reads as one wall.
+		mat.set_shader_parameter("body_energy", 0.45)
+		mat.set_shader_parameter("edge_energy", 0.9)
+		mat.set_shader_parameter("albedo_amount", 0.12)
+		var node := MeshInstance3D.new()
+		node.mesh = Meshes.ring_wall(door.radius, door.thickness, -0.5, 0.45, 40)
+		node.material_override = mat
+		node.position = door.centre
+		level_root.add_child(node)
+		door_bars.push_back([node, node, node])
 		door_mats.push_back(mat)
 
 	# The gate.
