@@ -38,7 +38,7 @@ namespace
 
     double lastRms = 0.0;
 
-    void render (int songIndex, int busMask, bool fire, float gain, const std::string& path, int strumStyle = 0)
+    void render (int songIndex, int busMask, bool fire, float gain, const std::string& path, int strumStyle = -1)
     {
         const Song& s = song (songIndex);
         auto band = std::make_unique<Conductor>();

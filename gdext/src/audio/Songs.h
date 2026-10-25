@@ -386,6 +386,15 @@ namespace np::audio
         return voices[std::clamp (s.hitBank, 0, 2)];
     }
 
+    /** Which chord a song's strum plays over the stick's (Conductor::strumStyle),
+        chosen by ear 2026-10-25: PULSE the chord a third up (Am7, Fmaj7 ...),
+        ACID a fifth up (Am9 colours), STARFALL the same chord. */
+    inline int strumChord (const Song& s) noexcept
+    {
+        static constexpr int styles[3] { 1, 2, 0 };
+        return styles[std::clamp (s.hitBank, 0, 2)];
+    }
+
     /** The drone (2026-10-24): saw and pulse with a slow PWM and a little
         sub, a slow swell and a long release, kept dark by its filter. */
     inline const JunoPatch& dronePatch() noexcept

@@ -96,8 +96,9 @@ namespace np::audio
             chosen by ear): 0 the same chord, 1 the chord a third up (Am -> C:
             an Am7 sound), 2 a fifth up (Am -> Em: Am9), 3 add9 (A B E), 4
             stacked fourths from the root. Every note is taken from the
-            section's key, so none of them clash. Set before start. */
-        int strumStyle = 0;
+            section's key, so none of them clash. -1, the default, is the
+            song's own choice (strumChord in Songs.h); tools set one to compare. */
+        int strumStyle = -1;
 
         /** For tools: the notes of the last strum, and whether it has played out. */
         const std::array<int, 8>& debugStrumNotes() const noexcept { return strumNotes; }
@@ -1076,7 +1077,7 @@ namespace np::audio
                 for (int i = 0; i < 8; ++i) strumNotes[(size_t) i] = root + set[i % 3] + 12 * (i / 3);
             };
 
-            switch (strumStyle)
+            switch (strumStyle >= 0 ? strumStyle : strumChord (*current))
             {
                 case 1:  stack3 (third, 7, seventh); break;               // the chord a third up
                 case 2:  stack3 (7, seventh, ninth + 12); break;          // a fifth up
