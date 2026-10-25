@@ -91,6 +91,17 @@ namespace np::audio
         std::atomic<int>   requestedSection { 0 };
         std::atomic<bool>  endless { false };
         int styleOverride = -1;   // a SectionStyle for every section instead of the song's own; set before start, for the previews
+
+        /** Which chord the strum plays over the stick's (2026-10-25, being
+            chosen by ear): 0 the same chord, 1 the chord a third up (Am -> C:
+            an Am7 sound), 2 a fifth up (Am -> Em: Am9), 3 add9 (A B E), 4
+            stacked fourths from the root. Every note is taken from the
+            section's key, so none of them clash. Set before start. */
+        int strumStyle = 0;
+
+        /** For tools: the notes of the last strum, and whether it has played out. */
+        const std::array<int, 8>& debugStrumNotes() const noexcept { return strumNotes; }
+        bool debugStrumReady() const noexcept { return strumIndex >= 8 && lastStrumTick >= 0; }
         std::atomic<bool>  firing { false };
         std::atomic<float> aimPan { 0.5f };
 
@@ -1048,13 +1059,61 @@ namespace np::audio
         // voice (strumVoice in Songs.h).
         void startStrum (std::int64_t k) noexcept
         {
-            const int root = placeAbove (rootPc (chord), 55);
+            const int rootClass = rootPc (chord);
+            const int root = placeAbove (rootClass, 55);
             const int third = chordThird (chord);
-            const int tones[8] { 0, third, 7, 12, 12 + third, 19, 24, 24 + third };
-            for (int i = 0; i < 8; ++i) strumNotes[(size_t) i] = root + tones[i];
+
+            // Intervals over the root that the section's key allows: the
+            // seventh, the ninth, the fourth.
+            auto inKey = [&] (int interval) { return inScale ((rootClass + interval) % 12); };
+            const int seventh = inKey (10) ? 10 : 11;
+            const int ninth = inKey (2) ? 2 : 0;
+            const int fourth = inKey (5) ? 5 : 6;
+
+            auto stack3 = [&] (int a, int b, int c)
+            {
+                const int set[3] { a, b, c };
+                for (int i = 0; i < 8; ++i) strumNotes[(size_t) i] = root + set[i % 3] + 12 * (i / 3);
+            };
+
+            switch (strumStyle)
+            {
+                case 1:  stack3 (third, 7, seventh); break;               // the chord a third up
+                case 2:  stack3 (7, seventh, ninth + 12); break;          // a fifth up
+                case 3:  stack3 (0, ninth, 7); break;                     // add9, no third
+                case 4:
+                {
+                    // Fourths, each moved to the key's own note when the plain
+                    // fourth is not in it.
+                    int x = 0;
+                    for (int i = 0; i < 8; ++i)
+                    {
+                        strumNotes[(size_t) i] = root + x;
+                        x += inScale ((rootClass + x + 5) % 12) ? 5 : 6;
+                    }
+                    break;
+                }
+                default: stack3 (0, third, 7); break;                     // the stick's own chord
+            }
+            std::sort (strumNotes.begin(), strumNotes.end());
             strumStart = k;
             strumIndex = 0;
             lastStrumTick = k;
+        }
+
+        /** The section's key: natural minor on the song's key, moved up for a
+            lifted chorus or bridge, plus the chord's own tones (the bridge's
+            major V). */
+        bool inScale (int pc) const noexcept
+        {
+            static constexpr int minor[7] { 0, 2, 3, 5, 7, 8, 10 };
+            const SectionStyle st = styleOverride >= 0 ? (SectionStyle) styleOverride
+                                  : (section == 1 ? current->chorusStyle : current->bridgeStyle);
+            const int shift = (section == 0 || st != SectionStyle::keyLift) ? 0 : (section == 1 ? 2 : 5);
+            const int tonic = (current->keyRoot + shift) % 12;
+            for (int d : minor) if ((tonic + d) % 12 == pc) return true;
+            const int r = rootPc (chord);
+            return pc == r || pc == (r + chordThird (chord)) % 12 || pc == (r + 7) % 12;
         }
 
         void strumTick (std::int64_t k) noexcept

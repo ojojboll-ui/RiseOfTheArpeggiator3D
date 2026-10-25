@@ -38,12 +38,13 @@ namespace
 
     double lastRms = 0.0;
 
-    void render (int songIndex, int busMask, bool fire, float gain, const std::string& path)
+    void render (int songIndex, int busMask, bool fire, float gain, const std::string& path, int strumStyle = 0)
     {
         const Song& s = song (songIndex);
         auto band = std::make_unique<Conductor>();
         band->prepare (kRate);
         band->busMask = busMask;
+        band->strumStyle = strumStyle;
         band->endless = true;
         band->requestedChord = s.homeSlot;
         band->post ({ Command::start, songIndex, 0 });
@@ -85,6 +86,19 @@ namespace
 int main (int argc, char** argv)
 {
     const std::string dir = argc > 1 ? argv[1] : ".";
+    // "styles": the strum's chord choices (Conductor::strumStyle) against the
+    // stick's chord on the pad and drone, for choosing by ear.
+    if (argc > 2 && std::string (argv[2]) == "styles")
+    {
+        const char* songNames[3] { "pulse", "acid", "starfall" };
+        const char* styles[5] { "1-same-chord", "2-third-up", "3-fifth-up", "4-add9", "5-fourths" };
+        for (int i = 0; i < 3; ++i)
+            for (int st = 0; st < 5; ++st)
+                render (i, Conductor::busDrone | Conductor::busStrum | Conductor::busPad | Conductor::busWet, false, 1.1f,
+                        dir + "/" + songNames[i] + "-strum-" + styles[st] + ".wav", st);
+        return 0;
+    }
+
     if (argc > 2 && std::string (argv[2]) == "measure")
     {
         for (int i = 0; i < 3; ++i)
