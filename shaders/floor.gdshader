@@ -10,6 +10,10 @@
 shader_type spatial;
 render_mode cull_back, diffuse_lambert, specular_schlick_ggx;
 
+// With few layers the floor is its grid alone, a vector landscape; its
+// surface, colour and light come in with the band (look.gdshaderinc).
+#include "res://shaders/look.gdshaderinc"
+
 uniform sampler2D waves : filter_linear, repeat_disable;
 uniform vec2 wave_dims = vec2(121.0, 111.0);   // points across and down
 uniform float wave_cell = 0.4;                 // metres between them
@@ -75,9 +79,14 @@ void fragment() {
 	float base = 0.10 + 0.16 * kick;
 	float line = max(minor * base * 0.55, major * base * 1.6) + max(minor, major) * stir * 0.6;
 
+	float fill = look_fill();
+	if (line < 0.015 && bayer4(FRAGCOORD.xy) >= fill)
+		discard;
+
 	// Lit enough that the facets of the hills catch the light differently.
-	ALBEDO = mix(vec3(0.012, 0.014, 0.03), zone.rgb * 0.16, 0.55);
+	ALBEDO = mix(vec3(0.012, 0.014, 0.03), zone.rgb * 0.16, 0.55) * look_lit();
 	ROUGHNESS = 0.6;
 	METALLIC = 0.2;
-	EMISSION = zone.rgb * line * line_energy;
+	// Brighter lines while they are all there is.
+	EMISSION = look_tint(zone.rgb) * line * line_energy * (1.0 + 0.4 * (1.0 - fill));
 }

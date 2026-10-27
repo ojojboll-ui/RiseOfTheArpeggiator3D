@@ -5,6 +5,8 @@
 shader_type spatial;
 render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabled;
 
+#include "res://shaders/look.gdshaderinc"
+
 uniform float energy = 3.0;
 
 varying vec4 col;
@@ -25,6 +27,6 @@ void vertex() {
 void fragment() {
 	// Across the streak, from the UV the quad carries: brightest down the middle.
 	float across = 1.0 - abs(UV.y * 2.0 - 1.0);
-	ALBEDO = col.rgb * energy;
+	ALBEDO = look_tint(col.rgb) * energy;
 	ALPHA = col.a * smoothstep(0.0, 0.6, across);
 }

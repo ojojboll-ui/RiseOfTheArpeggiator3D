@@ -27,6 +27,12 @@ and hills slow it going up and speed it going down — enemies too. Shooting
 down a black hole (the orange ball) clears every enemy on the screen, as the
 bomb does. Power-ups are green balls inside two spinning rings.
 
+The picture grows with the music, like the hero of Rez: with the kick alone
+the game is a vector wireframe in one pale colour, like an old arcade
+cabinet; each layer of the song brings more back — colour, then surfaces
+fading in through a dither, then light and shadows, then full glow — and a
+death takes a layer of the picture with the layer of sound.
+
 Slow motion leaves trails behind everything that shines.
 
 Still to come: a pass on looks and menus.

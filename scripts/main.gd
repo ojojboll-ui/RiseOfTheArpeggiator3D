@@ -38,6 +38,9 @@ var game: ArpGame
 var player: AudioStreamPlayer
 var camera: Camera3D
 var env: Environment
+var sun: DirectionalLight3D
+var look := 1.5                     # the band's layers, eased: how much of the picture there is (look.gdshaderinc)
+const MENU_LOOK := 1.5              # the menu: coloured wireframe, an arcade cabinet's attract screen
 var pad := Pad.new()
 var hud: Control
 var postfx: ColorRect
@@ -161,7 +164,7 @@ func _build_scene() -> void:
 	we.environment = env
 	add_child(we)
 
-	var sun := DirectionalLight3D.new()
+	sun = DirectionalLight3D.new()
 	sun.rotation = Vector3(deg_to_rad(-55.0), deg_to_rad(-35.0), 0.0)
 	sun.light_energy = 1.1
 	sun.light_color = Color(0.75, 0.8, 1.0)
@@ -214,6 +217,7 @@ func _build_scene() -> void:
 		enemy_mm.push_back(_multimesh(shapes[k], mat, ENEMY_CAP))
 
 	var bullet_mat := _neon_material(true)
+	bullet_mat.set_shader_parameter("solid", true)   # always whole: a bullet's colour is its chord
 	bullet_mat.set_shader_parameter("body_energy", 0.9)
 	bullet_mat.set_shader_parameter("edge_energy", 1.6)
 	bullet_mm = _multimesh(Meshes.bullet(), bullet_mat, BULLET_CAP, false)
@@ -583,6 +587,18 @@ func _draw_world(delta: float) -> void:
 	var d := game.hud()
 	var playing := screen != Screen.MENU and game.is_running()
 	d.towers = game.tower_states()
+
+	# The picture grows with the band (2026-10-27): a vector wireframe with the
+	# kick alone, colour, surfaces, light and shadows as the layers come in,
+	# lost again with them. Each step eases in over about half a second.
+	var want_look: float = float(d.layer) * 8.0 / max(1.0, float(d.max_layer)) if playing else MENU_LOOK
+	look += (want_look - look) * (1.0 - exp(-delta * 4.0))
+	RenderingServer.global_shader_parameter_set("look", look)
+	var lit := clampf((look - 4.0) / 2.0, 0.0, 1.0)
+	sun.shadow_enabled = look >= 5.5
+	sun.light_energy = 1.1 * lit
+	env.ambient_light_energy = 0.12 * lit
+	env.glow_intensity = lerpf(0.14, 0.32, clampf((look - 1.0) / 6.0, 0.0, 1.0))
 	d.gate = game.gate_state()
 
 	# Floor waves.
