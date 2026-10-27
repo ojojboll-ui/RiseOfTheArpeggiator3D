@@ -10,9 +10,11 @@ render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabl
 uniform float energy = 3.0;
 
 varying vec4 col;
+varying float here;
 
 void vertex() {
 	col = COLOR;
+	here = look_at(MODEL_MATRIX[3].xyz);
 	vec3 v = INSTANCE_CUSTOM.xyz;
 	float speed = length(v);
 	vec3 dir = speed > 1e-4 ? v / speed : vec3(1.0, 0.0, 0.0);
@@ -27,6 +29,6 @@ void vertex() {
 void fragment() {
 	// Across the streak, from the UV the quad carries: brightest down the middle.
 	float across = 1.0 - abs(UV.y * 2.0 - 1.0);
-	ALBEDO = look_tint(col.rgb) * energy;
+	ALBEDO = look_tint(col.rgb, here) * energy;
 	ALPHA = col.a * smoothstep(0.0, 0.6, across);
 }

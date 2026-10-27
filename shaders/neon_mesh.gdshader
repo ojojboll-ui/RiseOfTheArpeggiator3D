@@ -29,8 +29,10 @@ uniform float kick_glow = 0.5;
 varying vec3 bary;
 varying vec4 tint;
 varying float pulse;
+varying vec3 wpos;
 
 void vertex() {
+	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	bary = vec3(UV, UV2.x);
 	tint = instanced ? COLOR : base_color;
 	pulse = instanced ? INSTANCE_CUSTOM.z : kick;
@@ -41,13 +43,16 @@ void fragment() {
 	vec3 a = smoothstep(vec3(0.0), w * edge_px, bary);
 	float edge = 1.0 - min(min(a.x, a.y), a.z);
 	float alpha = tint.a;
-	float fill = solid ? 1.0 : look_fill();
-	float lit = solid ? 1.0 : look_lit();
-	vec3 c = solid ? tint.rgb : look_tint(tint.rgb);
-	if (edge < 0.4 && bayer4(FRAGCOORD.xy) >= fill)
+	float l = look_at(wpos);
+	float band = sweep_band(wpos);
+	float fill = solid ? 1.0 : look_fill(l);
+	float lit = solid ? 1.0 : look_lit(l);
+	vec3 c = solid ? tint.rgb : look_tint(tint.rgb, l);
+	if (edge < 0.4 && band < 0.2 && bayer4(FRAGCOORD.xy) >= fill)
 		discard;
 	ALBEDO = c * albedo_amount * alpha * lit;
 	ROUGHNESS = 0.4;
 	METALLIC = 0.35;
-	EMISSION = c * (edge * edge_energy * (1.0 + kick_glow * pulse) + body_energy * fill) * alpha;
+	EMISSION = c * (edge * edge_energy * (1.0 + kick_glow * pulse) + body_energy * fill) * alpha
+	         + mix(c, vec3(1.0), 0.3) * band * (0.15 + 3.0 * edge);   // the wavefront lights what it passes
 }

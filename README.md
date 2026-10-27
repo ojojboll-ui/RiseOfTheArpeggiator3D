@@ -31,7 +31,9 @@ The picture grows with the music, like the hero of Rez: with the kick alone
 the game is a vector wireframe in one pale colour, like an old arcade
 cabinet; each layer of the song brings more back — colour, then surfaces
 fading in through a dither, then light and shadows, then full glow — and a
-death takes a layer of the picture with the layer of sound.
+death takes a layer of the picture with the layer of sound. Each change
+rolls out from the ship as a bright ring on the downbeat the layer comes in
+on, crossing the screen over a bar.
 
 Slow motion leaves trails behind everything that shines.
 

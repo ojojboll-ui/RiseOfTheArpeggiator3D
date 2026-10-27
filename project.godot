@@ -27,14 +27,26 @@ window/size/window_height_override=900
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 
-[shader_globals]
-
-look={
-"type": "float",
-"value": 8.0
-}
-
 [rendering]
 
 anti_aliasing/quality/msaa_3d=2
 environment/defaults/default_clear_color=Color(0.004, 0.004, 0.012, 1)
+
+[shader_globals]
+
+look_from={
+"type": "float",
+"value": 8.0
+}
+look_to={
+"type": "float",
+"value": 8.0
+}
+sweep_origin={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+sweep_radius={
+"type": "float",
+"value": 1000.0
+}

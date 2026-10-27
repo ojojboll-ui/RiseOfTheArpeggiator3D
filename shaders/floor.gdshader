@@ -79,14 +79,19 @@ void fragment() {
 	float base = 0.10 + 0.16 * kick;
 	float line = max(minor * base * 0.55, major * base * 1.6) + max(minor, major) * stir * 0.6;
 
-	float fill = look_fill();
-	if (line < 0.015 && bayer4(FRAGCOORD.xy) >= fill)
+	float l = look_at(world);
+	float band = sweep_band(world);
+	float fill = look_fill(l);
+	if (line < 0.015 && band < 0.1 && bayer4(FRAGCOORD.xy) >= fill)
 		discard;
 
 	// Lit enough that the facets of the hills catch the light differently.
-	ALBEDO = mix(vec3(0.012, 0.014, 0.03), zone.rgb * 0.16, 0.55) * look_lit();
+	ALBEDO = mix(vec3(0.012, 0.014, 0.03), zone.rgb * 0.16, 0.55) * look_lit(l);
 	ROUGHNESS = 0.6;
 	METALLIC = 0.2;
-	// Brighter lines while they are all there is.
-	EMISSION = look_tint(zone.rgb) * line * line_energy * (1.0 + 0.4 * (1.0 - fill));
+	// Brighter lines while they are all there is; the sweep's wavefront a
+	// bright ring running over the floor, brightest on the lines.
+	vec3 lc = look_tint(zone.rgb, l);
+	EMISSION = lc * line * line_energy * (1.0 + 0.4 * (1.0 - fill))
+	         + look_tint(zone.rgb, look_to) * (band * (0.08 + 2.2 * max(minor, major)) + sweep_core(world) * 3.0);
 }

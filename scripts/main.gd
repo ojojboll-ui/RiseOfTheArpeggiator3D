@@ -19,6 +19,7 @@ extends Node3D
 ##   --counts          print counts and state once a second
 ##   --lookexit        the camera looks at the exit corridor instead
 ##   --pickup          drops a power-up ahead of the ship every 240 frames
+##   --sweepdebug      prints the look sweep while it runs
 
 const ENEMY_CAP := 256
 const BULLET_CAP := 768
@@ -39,7 +40,11 @@ var player: AudioStreamPlayer
 var camera: Camera3D
 var env: Environment
 var sun: DirectionalLight3D
-var look := 1.5                     # the band's layers, eased: how much of the picture there is (look.gdshaderinc)
+var look_from := 1.5                # how much of the picture there is (look.gdshaderinc): before a sweep...
+var look_to := 1.5                  # ...and after it, the band's layer count
+var sweep_time := 1000.0            # seconds since the last sweep began
+var sweep_origin := Vector3.ZERO
+const SWEEP_REACH := 32.0           # metres: past every corner of the screen
 const MENU_LOOK := 1.5              # the menu: coloured wireframe, an arcade cabinet's attract screen
 var pad := Pad.new()
 var hud: Control
@@ -590,10 +595,33 @@ func _draw_world(delta: float) -> void:
 
 	# The picture grows with the band (2026-10-27): a vector wireframe with the
 	# kick alone, colour, surfaces, light and shadows as the layers come in,
-	# lost again with them. Each step eases in over about half a second.
+	# lost again with them. Each change sweeps out from the ship as a bright
+	# wavefront, starting when the layer comes in on its downbeat and running
+	# out at an even speed over a bar (two beats with an ease-out crossed the
+	# screen in a tenth of a second: too fast to see).
 	var want_look: float = float(d.layer) * 8.0 / max(1.0, float(d.max_layer)) if playing else MENU_LOOK
-	look += (want_look - look) * (1.0 - exp(-delta * 4.0))
-	RenderingServer.global_shader_parameter_set("look", look)
+	if not playing:
+		look_from = want_look
+		look_to = want_look
+		sweep_time = 1000.0
+	elif want_look != look_to:
+		look_from = look_to         # a sweep still running is cut short
+		look_to = want_look
+		sweep_time = 0.0
+		sweep_origin = game.ship_position()
+	var beats := 4.0 * 60.0 / float(game.song_info(int(d.level)).bpm)
+	sweep_time += delta
+	var progress := clampf(sweep_time / beats, 0.0, 1.0)
+	if progress >= 1.0:
+		look_from = look_to
+	var reach := SWEEP_REACH * progress
+	RenderingServer.global_shader_parameter_set("look_from", look_from)
+	RenderingServer.global_shader_parameter_set("look_to", look_to)
+	RenderingServer.global_shader_parameter_set("sweep_origin", sweep_origin)
+	RenderingServer.global_shader_parameter_set("sweep_radius", reach if progress < 1.0 else 1000.0)
+	if _flag("--sweepdebug") and progress < 1.0:
+		print("clock %.2f sweep t %.2f from %.1f to %.1f reach %.1f" % [clock, sweep_time, look_from, look_to, reach])
+	var look := lerpf(look_from, look_to, progress)   # for what is not drawn per pixel: light, shadows, glow
 	var lit := clampf((look - 4.0) / 2.0, 0.0, 1.0)
 	sun.shadow_enabled = look >= 5.5
 	sun.light_energy = 1.1 * lit
