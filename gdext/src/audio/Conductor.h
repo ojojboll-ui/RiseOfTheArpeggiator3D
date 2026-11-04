@@ -166,7 +166,8 @@ namespace np::audio
             for (auto& v : killVoices) v.prepare (sampleRate);
             for (auto& v : shotVoices) { v.prepare (sampleRate); v.setPatch (shotgunPatch()); }
             shotEcho.prepare (sampleRate);
-            shotEcho.setAmount (0.55f, 0.55f);
+            shotEcho.setAmount (0.55f, 0.6f);
+            for (auto& e : shotChorus) { e.prepare (sampleRate); e.setRate (0.7f); e.setMix (0.55f); }
             reverb.prepare (sampleRate);
             riser.prepare (sampleRate);
             killPling.prepare (sampleRate);
@@ -759,7 +760,7 @@ namespace np::audio
             if (shotgunShells > 0)
             {
                 if (k % kTicksPerBeat != 0) return;
-                playShotgun (chord);
+                playShotgun (chord, kShotgunShells - shotgunShells);
                 postEvent ({ Event::shot, placeAbove (rootPc (chord), 48), chord, 50, 2 });
                 --shotgunShells;
                 return;
@@ -785,18 +786,32 @@ namespace np::audio
         /** A shotgun blast: the chord, fat — six Juno voices across three
             octaves on a brassy saw patch — with a thud under it, into an echo
             of its own. Nothing like the arpeggio's pluck. */
-        void playShotgun (int slot) noexcept
+        void playShotgun (int slot, int index) noexcept
         {
+            // It sings (2026-11-04, "mer musikaliskt"): the chord under a top
+            // voice that climbs the chord's tones one blast at a time — the
+            // eight shells are a phrase, up through two octaves and back to
+            // the octave — held most of a beat so each rings into the next.
+            static constexpr int melody[8] { 0, 1, 2, 3, 4, 5, 6, 3 };
             const int root = placeAbove (rootPc (slot), 40);
             const int third = chordThird (slot);
-            const int notes[6] { root, root + 7, root + 12, root + 12 + third, root + 19, root + 24 };
-            const int gate = (int) (samplesPerTick * kTicksPerBeat * 0.6);
+            const int top = arpNote (slot, melody[(size_t) std::clamp (index, 0, 7)]);
+            const int notes[6] { root, root + 7, root + 12, root + 12 + third, top, top - 12 };
+            static constexpr float level[6] { 0.9f, 0.75f, 0.75f, 0.7f, 1.0f, 0.6f };
+            const int gate = (int) (samplesPerTick * kTicksPerBeat * 0.9);
             for (int i = 0; i < 6; ++i)
             {
-                shotVoices[(size_t) i].noteOff();
-                shotVoices[(size_t) i].noteOn (notes[i], i == 0 ? 1.0f : 0.85f, gate, ++order);
+                auto* v = &shotVoices[0];
+                std::uint64_t oldest = ~(std::uint64_t) 0;
+                for (auto& s : shotVoices)
+                {
+                    if (! s.isActive()) { v = &s; break; }
+                    if (s.age() < oldest) { oldest = s.age(); v = &s; }
+                }
+                v->noteOn (notes[i], level[i], gate, ++order);
+                shotPan[(size_t) (v - shotVoices.data())] = i == 4 ? 0.5f : 0.3f + 0.1f * (float) i;
             }
-            kit.trigger (PumpKit::boom, 0.45f);
+            kit.trigger (PumpKit::boom, 0.2f);
         }
 
         int arpNote (int slot, int degree) const noexcept
@@ -1437,14 +1452,18 @@ namespace np::audio
                 // with its echo.
                 {
                     float sl = 0.0f, sr = 0.0f;
-                    static constexpr float pans[6] { 0.5f, 0.35f, 0.65f, 0.3f, 0.7f, 0.5f };
                     for (size_t k = 0; k < shotVoices.size(); ++k)
                     {
                         if (! shotVoices[k].isActive()) continue;
-                        const float x = shotVoices[k].process (0.0f, 0.62f, 0.25f, 1.0f);
-                        sl += x * std::cos (pans[k] * 1.5707963f);
-                        sr += x * std::sin (pans[k] * 1.5707963f);
+                        const float x = shotVoices[k].process (0.0f, 0.66f, 0.38f, 1.0f);
+                        sl += x * std::cos (shotPan[k] * 1.5707963f);
+                        sr += x * std::sin (shotPan[k] * 1.5707963f);
                     }
+                    // A chorus for width and shimmer, then its echo.
+                    float cl = 0.0f, cr = 0.0f, unused = 0.0f;
+                    shotChorus[0].process (sl, cl, unused);
+                    shotChorus[1].process (sr, unused, cr);
+                    sl = cl; sr = cr;
                     shotEcho.process (sl, sr);
                     const float g = (busMask & busShot) ? kShot : 0.0f;
                     l += sl * g;
@@ -1573,10 +1592,12 @@ namespace np::audio
         std::array<JunoVoice, 4> pad;
         std::array<Ensemble, 2> padChorus;
         TempoDelay delay, deathEcho, killEcho, slowEcho, shotEcho;
-        std::array<JunoVoice, 6> shotVoices;
+        std::array<JunoVoice, 12> shotVoices;   // two blasts' worth, so each rings into the next
+        std::array<float, 12> shotPan {};
+        std::array<Ensemble, 2> shotChorus;
         int shotgunShells = 0;
         static constexpr int kShotgunShells = 8;
-        static constexpr float kShot = 0.70f;   // about 3 dB over the arpeggio (tools/audiotest; 0.30 sat 4 dB under it)
+        static constexpr float kShot = 1.15f;   // about 6 dB over the arpeggio (tools/audiotest; 0.30 sat 4 dB under it, 0.70 3 dB over, then "höj lite till")
         Svf slowNoiseL, slowNoiseR;
         float brownL = 0.0f, brownR = 0.0f;
         std::uint32_t slowRngL = 0x68e31da4u, slowRngR = 0xb5297a4du;

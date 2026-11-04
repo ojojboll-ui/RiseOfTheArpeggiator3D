@@ -38,7 +38,7 @@ namespace
 
     double lastRms = 0.0;
 
-    void render (int songIndex, int busMask, bool fire, float gain, const std::string& path, int strumStyle = -1)
+    void render (int songIndex, int busMask, bool fire, float gain, const std::string& path, int strumStyle = -1, bool shotgun = false)
     {
         const Song& s = song (songIndex);
         auto band = std::make_unique<Conductor>();
@@ -62,6 +62,12 @@ namespace
         {
             // The next bar's chord half a beat before it.
             const int chordBar = (int) (((double) pos + samplesPerBeat * 0.5) / samplesPerBar);
+            // Shells at bars 2 and 8: two volleys of eight, each two bars long.
+            if (shotgun)
+            {
+                const int barNow = (int) ((double) pos / samplesPerBar), barBefore = (int) ((double) (pos - (pos > 0 ? 256 : 0)) / samplesPerBar);
+                if (pos > 0 && barNow != barBefore && (barNow == 2 || barNow == 8)) band->post ({ Command::shotgun });
+            }
             band->requestedChord = (s.homeSlot + chordBar) % 4;
             if (pos >= total) { band->firing = false; band->post ({ Command::stop }); }
 
@@ -88,6 +94,16 @@ int main (int argc, char** argv)
     const std::string dir = argc > 1 ? argv[1] : ".";
     // "styles": the strum's chord choices (Conductor::strumStyle) against the
     // stick's chord on the pad and drone, for choosing by ear.
+    // "shotgun": each song with every layer in, the arpeggio firing, and two
+    // volleys of the shotgun's eight shells (bars 2-4 and 8-10).
+    if (argc > 2 && std::string (argv[2]) == "shotgun")
+    {
+        const char* songNames[3] { "pulse", "acid", "starfall" };
+        for (int i = 0; i < 3; ++i)
+            render (i, Conductor::busAll, true, 1.0f, dir + "/" + songNames[i] + "-shotgun.wav", -1, true);
+        return 0;
+    }
+
     if (argc > 2 && std::string (argv[2]) == "styles")
     {
         const char* songNames[3] { "pulse", "acid", "starfall" };

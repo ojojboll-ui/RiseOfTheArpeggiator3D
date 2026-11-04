@@ -404,11 +404,12 @@ namespace np::audio
     }
 
     /** The shotgun's chord (2026-11-04): saw-heavy with the pulse and the sub
-        under it, a hard attack, a half-second fall and some ring — brassy and
-        fat where the arpeggio is a pluck. */
+        under it, brassy and fat where the arpeggio is a pluck. Made to sing the
+        same day: a softer edge on the attack, a long sustain and release, more
+        pulse-width movement, and less noise. */
     inline const JunoPatch& shotgunPatch() noexcept
     {
-        static const JunoPatch p { "SHOT", 1.00f,0.55f,0.60f,0.05f, 0.40f,0.25f,0.55f, 0.65f,0.30f,0.05f, 0.002f,0.45f,0.35f,0.70f, 0.85f, 0.0f,0.0f,0 };
+        static const JunoPatch p { "SHOT", 1.00f,0.55f,0.45f,0.00f, 0.40f,0.40f,0.45f, 0.55f,0.35f,0.08f, 0.006f,0.90f,0.55f,1.30f, 0.85f, 0.0f,0.0f,0 };
         return p;
     }
 
