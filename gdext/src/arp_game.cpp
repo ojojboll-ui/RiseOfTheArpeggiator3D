@@ -278,6 +278,8 @@ Dictionary ArpGame::hud() const
     d["zone"] = w->zone();
     d["towers_left"] = w->towersLeft();
     d["doors_left"] = w->doorsLeft();
+    d["shells"] = cond.pubShells.load();
+    d["shotgun_color"] = toColor (np::kShotgunColor);
     d["clears"] = w->clears();
     int wells = 0;
     for (const auto& e : w->enemyList()) if (e.alive && e.kind == np::EnemyKind::well) ++wells;
@@ -383,9 +385,11 @@ PackedFloat32Array ArpGame::bullet_buffer (int capacity) const
     {
         if (! b.alive) continue;
         const Vec2 dir = b.vel.normalised();
-        const float len = (b.accent ? 26.0f : 18.0f) * kScale;
-        const float thick = (b.accent ? 5.5f : 4.0f) * kScale;
-        const np::Color c = np::World::chordColor (b.chord);
+        // Shotgun pellets: bigger, and white-hot orange mixed with the chord.
+        const float len = (b.heavy ? 40.0f : (b.accent ? 26.0f : 18.0f)) * kScale;
+        const float thick = (b.heavy ? 10.0f : (b.accent ? 5.5f : 4.0f)) * kScale;
+        const np::Color c = b.heavy ? np::mix (np::kShotgunColor, np::World::chordColor (b.chord), 0.3f)
+                                    : np::World::chordColor (b.chord);
 
         Basis basis;
         basis.set_column (0, Vector3 (dir.x, 0, dir.y) * len);
@@ -427,7 +431,9 @@ PackedFloat32Array ArpGame::pickup_buffer (int capacity) const
         const float pulse = 1.0f + 0.12f * std::sin (view()->clock() * 9.0f) + 0.15f * kick;
         const float r = 20.0f * pulse * kScale * kLook;
         const Basis b = yaw (p.angle).scaled (Vector3 (r, r, r));
-        const np::Color c { 0.08f, 1.0f, 0.16f };   // deeper than kPowerUpColor: the tonemapper paled it to mint
+        // Deeper than kPowerUpColor: the tonemapper paled it to mint. The
+        // shotgun's is orange.
+        const np::Color c = p.kind == 1 ? np::Color { 1.0f, 0.42f, 0.0f } : np::Color { 0.08f, 1.0f, 0.16f };
         out.put (b, place (p.pos, kPickupHover), Color (c.r, c.g, c.b, blink * (0.8f + 0.2f * pulse)), Color (blink, kick, kick, 0));
     }
     return out.finish (lastCount);
@@ -444,7 +450,7 @@ PackedFloat32Array ArpGame::pickup_ring_buffer (int capacity) const
     {
         if (! p.alive) continue;
         const float blink = p.life < 2.0f ? (std::sin (p.life * 25.0f) > 0.0f ? 1.0f : 0.25f) : 1.0f;
-        const np::Color c { 0.08f, 1.0f, 0.16f };   // deeper than kPowerUpColor: the tonemapper paled it to mint
+        const np::Color c = p.kind == 1 ? np::Color { 1.0f, 0.42f, 0.0f } : np::Color { 0.08f, 1.0f, 0.16f };
         // Two rings round the ball like a target, tipped a little each way and
         // turning opposite ways, so they cross and part as they spin.
         for (int k = 0; k < 2; ++k)
@@ -745,7 +751,7 @@ void ArpGame::_bind_methods()
     ClassDB::bind_method (D_METHOD ("ring_buffer", "capacity"), &ArpGame::ring_buffer);
     ClassDB::bind_method (D_METHOD ("pickup_ring_buffer", "capacity"), &ArpGame::pickup_ring_buffer);
     ClassDB::bind_method (D_METHOD ("set_view", "corners"), &ArpGame::set_view);
-    ClassDB::bind_method (D_METHOD ("drop_pickup_for_test"), &ArpGame::drop_pickup_for_test);
+    ClassDB::bind_method (D_METHOD ("drop_pickup_for_test", "kind"), &ArpGame::drop_pickup_for_test, DEFVAL (0));
     ClassDB::bind_method (D_METHOD ("last_count"), &ArpGame::last_count);
     ClassDB::bind_method (D_METHOD ("ship_transform"), &ArpGame::ship_transform);
     ClassDB::bind_method (D_METHOD ("ship_visible"), &ArpGame::ship_visible);

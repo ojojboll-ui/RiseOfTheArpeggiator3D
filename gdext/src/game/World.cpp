@@ -192,7 +192,10 @@ namespace np
         {
             case Event::shot:
                 if (state == Phase::playing && ship.alive)
-                    spawnShot (e.a, e.b, e.c, e.d != 0);
+                {
+                    if (e.d == 2) spawnShotgun (e.b);   // a shotgun blast, on the beat
+                    else spawnShot (e.a, e.b, e.c, e.d != 0);
+                }
                 break;
 
             case Event::bar:
@@ -510,6 +513,43 @@ namespace np
         if (firing) aimDir = in.aim.normalised();
         // The camera follows the ship, so the arpeggio pans with the aim.
         band.aimPan = 0.5f + 0.2f * aimDir.x;
+    }
+
+    void World::spawnShotgun (int chord)
+    {
+        // Nine heavy pellets in a cone (2026-11-04): four times a shot's
+        // damage each, through two enemies before they stop, gone after half
+        // a second — close range.
+        const float base = aimDir.angle();
+        for (int i = 0; i < 9; ++i)
+        {
+            Bullet b;
+            const float a = base + ((float) i / 8.0f - 0.5f) * 0.8f + rng.range (-0.03f, 0.03f);
+            b.pos = ship.pos + fromAngle (base, 24.0f);
+            b.vel = fromAngle (a, kBulletSpeed * rng.range (1.05f, 1.2f));
+            b.chord = chord;
+            b.life = 0.5f;
+            b.damage = 4.0f;
+            b.pierce = 2;
+            b.heavy = true;
+            b.accent = true;
+            bullets.push_back (b);
+        }
+        explode (ship.pos + fromAngle (base, 30.0f), kShotgunColor, { 1, 1, 0.8f }, 40, 700.0f, 0.4f, 0.3f);
+        grid.push (ship.pos + fromAngle (base, 120.0f), 500.0f, 220.0f);
+        shakeAmount = std::max (shakeAmount, 5.0f);
+        ship.vel -= aimDir * 120.0f;   // a kick back
+    }
+
+    bool World::hasPickup (int kind) const
+    {
+        for (const auto& p : pickups) if (p.alive && p.kind == kind) return true;
+        return false;
+    }
+
+    void World::dropPickup (Vec2 at, int kind)
+    {
+        pickups.push_back ({ at, rng.inDisc (80.0f), 9.0f, 0.0f, true, kind });
     }
 
     void World::spawnShot (int note, int chord, int index, bool accent)
@@ -910,6 +950,7 @@ namespace np
             if (e.alive && (e.pos - t.pos).length() < 650.0f) kill (e, chord, true, false);
 
         addScore (t.wave == 0 ? 5000 : 10000, t.pos);
+        if (! hasPickup (1)) dropPickup (t.pos, 1);   // a fallen tower leaves a shotgun
         band.post ({ Command::tower, chord, 0, panOf (t.pos) });
 
         // Its door, of its zone and wave, goes with it.
@@ -1088,12 +1129,22 @@ namespace np
                 if (dist < 38.0f)
                 {
                     p.alive = false;
-                    band.post ({ Command::powerUp });
-                    static const char* names[3] { "ARP 1/8", "ARP 1/16", "ARP 1/32" };
-                    const int rate = std::min (2, band.pubArpRate.load() + 1);
-                    popups.push_back ({ p.pos, names[rate], 1.4f, kPowerUpColor, 30.0f });
-                    explode (p.pos, kPowerUpColor, { 1, 1, 1 }, 60, 600.0f, 0.9f);
-                    rings.push_back ({ p.pos, 20.0f, 900.0f, 0.5f, kPowerUpColor });
+                    if (p.kind == 1)
+                    {
+                        band.post ({ Command::shotgun });
+                        popups.push_back ({ p.pos, "SHOTGUN x8", 1.6f, kShotgunColor, 34.0f });
+                        explode (p.pos, kShotgunColor, { 1, 1, 1 }, 80, 700.0f, 0.9f);
+                        rings.push_back ({ p.pos, 20.0f, 1000.0f, 0.6f, kShotgunColor });
+                    }
+                    else
+                    {
+                        band.post ({ Command::powerUp });
+                        static const char* names[3] { "ARP 1/8", "ARP 1/16", "ARP 1/32" };
+                        const int rate = std::min (2, band.pubArpRate.load() + 1);
+                        popups.push_back ({ p.pos, names[rate], 1.4f, kPowerUpColor, 30.0f });
+                        explode (p.pos, kPowerUpColor, { 1, 1, 1 }, 60, 600.0f, 0.9f);
+                        rings.push_back ({ p.pos, 20.0f, 900.0f, 0.5f, kPowerUpColor });
+                    }
                 }
             }
 
@@ -1121,7 +1172,7 @@ namespace np
                 b.alive = false;
                 if (! t.shootable()) break;   // still rising: the shot just stops
                 const int quarterBefore = (int) std::ceil (t.hp / t.maxHp * 4.0f);
-                t.hp -= 1.0f;
+                t.hp -= b.damage;
                 t.flash = 1.0f;
                 const int quarterAfter = (int) std::ceil (t.hp / t.maxHp * 4.0f);
                 for (int i = 0; i < 3; ++i)
@@ -1154,11 +1205,13 @@ namespace np
                 const float r = e.radius + 6.0f;
                 if ((e.pos - b.pos).lengthSq() > r * r) continue;
 
-                b.alive = false;
+                // A heavy pellet goes on through; anything else stops here.
+                if (b.pierce > 0 && e.kind != EnemyKind::well) --b.pierce;
+                else b.alive = false;
 
                 if (e.kind == EnemyKind::well)
                 {
-                    e.hp -= 1.0f;
+                    e.hp -= b.damage;
                     e.flash = 1.0f;
                     e.vel += b.vel * 0.01f;
                     grid.push (e.pos, 120.0f, 120.0f);
@@ -1211,9 +1264,13 @@ namespace np
             addScore (e.value * multiplier, e.pos);
             if (! slowActive) slowMeter = std::min (1.0f, slowMeter + kSlowPerKill);   // no refill while it runs
 
-            // Arpeggio power-ups drop now and then while there is room to speed up.
-            if (band.pubArpRate.load() < 2 && pickups.empty() && rng.chance (big ? 0.6f : 0.022f))
-                pickups.push_back ({ e.pos, rng.inDisc (80.0f), 9.0f, 0.0f, true });
+            // Arpeggio power-ups drop now and then while there is room to speed
+            // up; shotguns rarely, more often from a black hole, never while
+            // shells are left.
+            if (band.pubArpRate.load() < 2 && ! hasPickup (0) && rng.chance (big ? 0.6f : 0.022f))
+                dropPickup (e.pos, 0);
+            else if (band.pubShells.load() == 0 && ! hasPickup (1) && rng.chance (big ? 0.5f : 0.008f))
+                dropPickup (e.pos, 1);
         }
 
         if (e.kind == EnemyKind::splitter && scored)

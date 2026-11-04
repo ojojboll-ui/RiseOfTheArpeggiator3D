@@ -98,6 +98,7 @@ namespace
                 if (at (117.0)) c->requestedSection = 2;
                 if (at (120.0)) c->post ({ Command::tower, 0, 1, 0.5f });
                 if (at (122.0)) c->requestedSection = 0;
+                if (at (50.0))  c->post ({ Command::shotgun });   // eight blasts on the beats after it (2026-11-04)
 
                 nextInput += 256;
             }
@@ -404,6 +405,24 @@ int main (int argc, char** argv)
             std::printf (" %s %.1f/%.1f", busNames[bus], dB (std::sqrt (sum / (2.0 * (to - from)))), dB (pk));
         }
         std::printf ("  (RMS/peak dB)\n");
+
+        // The shotgun (from 50 s) against the arpeggio just before it, and its
+        // eight blasts counted (shots with d == 2).
+        {
+            int blasts = 0;
+            for (const auto& e : a.events) if (e.type == Event::shot && e.d == 2) ++blasts;
+            auto busRms = [&] (int bus, double from, double to)
+            {
+                const auto solo = play (s, 256, to, bus);
+                double sum = 0.0;
+                const size_t a0 = (size_t) (from * kRate), a1 = solo.left.size();
+                for (size_t i = a0; i < a1; ++i) sum += solo.left[i] * solo.left[i] + solo.right[i] * solo.right[i];
+                return dB (std::sqrt (sum / (2.0 * (a1 - a0))));
+            };
+            std::printf ("  shotgun: %d blasts; arp 46-50 s %.1f, shotgun 50-55 s %.1f dB RMS\n", blasts,
+                         busRms (Conductor::busArp, 46.0, 50.0), busRms (Conductor::busShot, 50.0, 55.0));
+            if (blasts != 8) fail ("the shotgun should fire exactly its eight shells");
+        }
 
         // The drone and the strum (2026-10-24) against the pad, every layer in from the start.
         {

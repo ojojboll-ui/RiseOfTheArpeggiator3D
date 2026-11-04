@@ -228,11 +228,13 @@ func _build_scene() -> void:
 	bullet_mm = _multimesh(Meshes.bullet(), bullet_mat, BULLET_CAP, false)
 
 	var pickup_mat := _neon_material(true)
+	pickup_mat.set_shader_parameter("solid", true)   # always whole and coloured: a pickup must read as one
 	pickup_mat.set_shader_parameter("body_energy", 0.35)
 	pickup_mat.set_shader_parameter("edge_energy", 0.7)
 	pickup_mat.set_shader_parameter("albedo_amount", 0.5)
 	pickup_mm = _multimesh(Meshes.pickup(), pickup_mat, PICKUP_CAP)
 	var hoop_mat := _neon_material(true)
+	hoop_mat.set_shader_parameter("solid", true)
 	hoop_mat.set_shader_parameter("body_energy", 0.45)
 	hoop_mat.set_shader_parameter("edge_energy", 0.5)
 	pickup_ring_mm = _multimesh(Meshes.hoop(), hoop_mat, PICKUP_CAP * 2, false)
@@ -531,7 +533,7 @@ func _play(delta: float) -> void:
 		return
 
 	if _flag("--pickup") and Engine.get_process_frames() % 240 == 0:
-		game.drop_pickup_for_test()
+		game.drop_pickup_for_test(int(Engine.get_process_frames() / 240) % 2)
 	var c := pad.controls(_mouse_aim())
 	game.step(delta, c.move, c.aim, c.fire, c.bomb, c.slow)
 	if game.take_died():
@@ -621,12 +623,15 @@ func _draw_world(delta: float) -> void:
 	RenderingServer.global_shader_parameter_set("sweep_radius", reach if progress < 1.0 else 1000.0)
 	if _flag("--sweepdebug") and progress < 1.0:
 		print("clock %.2f sweep t %.2f from %.1f to %.1f reach %.1f" % [clock, sweep_time, look_from, look_to, reach])
-	var look := lerpf(look_from, look_to, progress)   # for what is not drawn per pixel: light, shadows, glow
-	var lit := clampf((look - 4.0) / 2.0, 0.0, 1.0)
-	sun.shadow_enabled = look >= 5.5
+	# What is not drawn per pixel follows the sweep's newer side at once: the
+	# light (where nothing has a surface yet it lights nothing), shadows from
+	# the pad, glow from the hat, the most at the top.
+	var look := maxf(look_from, look_to)
+	var lit := clampf(look - 4.0, 0.0, 1.0)
+	sun.shadow_enabled = look >= 5.5   # the pad, layer 6
 	sun.light_energy = 1.1 * lit
 	env.ambient_light_energy = 0.12 * lit
-	env.glow_intensity = lerpf(0.14, 0.32, clampf((look - 1.0) / 6.0, 0.0, 1.0))
+	env.glow_intensity = 0.12 if look < 2.0 else (0.22 if look < 6.5 else 0.34)   # the hat (2) brings glow, the clap (7) the most
 	d.gate = game.gate_state()
 
 	# Floor waves.

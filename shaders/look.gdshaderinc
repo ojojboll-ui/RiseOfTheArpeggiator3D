@@ -20,7 +20,7 @@ global uniform vec3 sweep_origin;
 global uniform float sweep_radius;     // metres; large once the sweep is over
 
 const vec3 VECTOR_TINT = vec3(0.62, 0.92, 1.0);
-const float SWEEP_EDGE = 1.0;          // metres the old look and the new blend over
+const float SWEEP_EDGE = 0.15;         // metres the old look and the new blend over: a hard edge (1.0 was too soft)
 const float SWEEP_BAND = 1.1;          // the wavefront's glow, half-width in metres
 const float SWEEP_CORE = 0.18;         // its bright line
 
@@ -50,9 +50,14 @@ float sweep_core(vec3 world) {
 	return exp(-x * x);
 }
 
-float look_colour(float l) { return clamp(l / 4.0, 0.0, 1.0); }
-float look_fill(float l)   { return clamp((l - 3.0) / 3.0, 0.0, 1.0); }
-float look_lit(float l)    { return clamp((l - 4.0) / 2.0, 0.0, 1.0); }
+// Each layer brings one whole thing at once, for contrast (2026-11-04: the
+// gradual ramps, a quarter of the colour a layer, made the steps hard to see):
+// the bass all the colour, the 16ths half the surfaces, the drone all of
+// them, the open hat the light. (The hat brings glow and the pad shadows, in
+// main.gd.) Between whole layers — the sweep's edge — they still blend.
+float look_colour(float l) { return clamp(l, 0.0, 1.0); }
+float look_fill(float l)   { return clamp((l - 2.0) * 0.5, 0.0, 0.5) + clamp(l - 3.0, 0.0, 0.5); }
+float look_lit(float l)    { return clamp(l - 4.0, 0.0, 1.0); }
 
 // One pale colour for everything at first, the real colours as layers come in.
 vec3 look_tint(vec3 c, float l) {

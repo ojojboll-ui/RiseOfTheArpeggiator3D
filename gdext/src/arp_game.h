@@ -72,7 +72,7 @@ public:
     PackedFloat32Array pickup_ring_buffer (int capacity) const;
     /** The floor the camera sees, four corners in metres on the level's plane. */
     void set_view (PackedVector2Array corners);
-    void drop_pickup_for_test() { if (world) world->dropPickupForTest(); }
+    void drop_pickup_for_test (int kind) { if (world) world->dropPickupForTest (kind); }
     int last_count() const { return lastCount; }
     Transform3D ship_transform() const;
     bool ship_visible() const;

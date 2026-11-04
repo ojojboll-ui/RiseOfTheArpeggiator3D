@@ -134,6 +134,7 @@ func _draw_game() -> void:
 	for i in data.bombs:
 		glow_circle(Vector2(W - 420.0 + 34.0 * i, 40.0), 11.0, data.bomb_color, 3.0)
 
+	_draw_shells(Vector2(W * 0.5, H - 70.0))
 	_draw_wheel(Vector2(160.0, H - 170.0))
 	var zc: Color = data.zone_colors[data.section]
 	text(data.section_name, Vector2(160.0, H - 300.0), 24, zc, 0.5)
@@ -167,6 +168,27 @@ func _draw_game() -> void:
 
 	if attract:
 		text("ATTRACT MODE  ·  PRESS A", Vector2(W * 0.5, H - 70.0), 24, Color(1, 1, 1, 0.5 + 0.5 * sin(clock * 3.0)), 0.5)
+
+
+## The shotgun's shells (2026-11-04): eight big cartridges along the bottom,
+## spent ones as outlines, while any are left.
+func _draw_shells(centre: Vector2) -> void:
+	var shells: int = data.get("shells", 0)
+	if shells <= 0:
+		return
+	var c: Color = data.shotgun_color
+	var w := 26.0
+	var gap := 12.0
+	var x0 := centre.x - (8.0 * w + 7.0 * gap) * 0.5
+	for i in 8:
+		var r := Rect2(x0 + i * (w + gap), centre.y - 26.0, w, 52.0)
+		if i < shells:
+			draw_rect(Rect2(r.position - Vector2(3, 3), r.size + Vector2(6, 6)), Color(c, 0.25))
+			draw_rect(r, c)
+			draw_rect(Rect2(r.position.x, r.end.y - 12.0, w, 12.0), Color(0.9, 0.8, 0.5))   # the brass
+		else:
+			draw_rect(r, Color(c, 0.35), false, 2.0)
+	text("SHOTGUN", Vector2(centre.x, centre.y - 62.0), 22, c, 0.5)
 
 
 ## A map of the level: rooms in their colours, towers, the gate, the ship.

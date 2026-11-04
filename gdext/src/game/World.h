@@ -92,7 +92,7 @@ namespace np
         void setView (const std::array<Vec2, 4>& corners);
 
         /** For looking at it in a test: a power-up ahead of the ship. */
-        void dropPickupForTest() { pickups.push_back ({ ship.pos + fromAngle (ship.angle, 260.0f), {}, 30.0f, 0.0f, true }); }
+        void dropPickupForTest (int kind = 0) { pickups.push_back ({ ship.pos + fromAngle (ship.angle, 260.0f), {}, 30.0f, 0.0f, true, kind }); }
 
         /** Floor and sparks only — for the menu's background, round the
             verse room's start. */
@@ -153,7 +153,13 @@ namespace np
 
         struct Gate { Vec2 pos; bool open = false; float openTime = 0.0f; };
 
-        struct Bullet { Vec2 pos, vel; int chord = 0, note = -1; float life = 1.5f; bool accent = false; bool alive = true; };
+        /** A shot. A shotgun pellet is heavy: more damage, and it goes on
+            through `pierce` more enemies before it stops. */
+        struct Bullet
+        {
+            Vec2 pos, vel; int chord = 0, note = -1; float life = 1.5f; bool accent = false; bool alive = true;
+            float damage = 1.0f; int pierce = 0; bool heavy = false;
+        };
 
         /** A spark. It flies in the plane like the 2D game's and, now that the
             floor is a floor, up as well: z is its height above the floor, and
@@ -166,7 +172,8 @@ namespace np
             float z = 0.0f, vz = 0.0f;
         };
 
-        struct Pickup { Vec2 pos, vel; float life = 9.0f, angle = 0.0f; bool alive = true; };
+        /** kind 0: the arpeggio's speed-up; 1: the shotgun's eight shells. */
+        struct Pickup { Vec2 pos, vel; float life = 9.0f, angle = 0.0f; bool alive = true; int kind = 0; };
         struct Popup { Vec2 pos; std::string text; float life = 1.0f; Color color; float size = 22.0f; };
         struct Ring  { Vec2 pos; float radius = 0.0f, speed = 1500.0f, life = 1.0f; Color color; };
 
@@ -222,6 +229,9 @@ namespace np
         void collide();
 
         void spawnShot (int note, int chord, int index, bool accent);
+        void spawnShotgun (int chord);
+        void dropPickup (Vec2 at, int kind);
+        bool hasPickup (int kind) const;
         void spawnWave (int bar, bool half);
         void towerBurst (Tower& t);
         void spawnEnemy (EnemyKind kind, Vec2 pos, float delay = 0.0f);
@@ -296,6 +306,7 @@ namespace np
 
     /** Power-ups are green and bombs red, so the two never look alike. */
     constexpr Color kPowerUpColor { 0.35f, 1.0f, 0.45f };
+    constexpr Color kShotgunColor { 1.0f, 0.55f, 0.05f };   // the shotgun's pickup, pellets and shells (2026-11-04)
     constexpr Color kBombColor    { 1.0f, 0.22f, 0.18f };
 
     /** Per-level looks. */

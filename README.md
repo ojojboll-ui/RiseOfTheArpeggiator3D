@@ -25,12 +25,16 @@ and bombs.
 The ship is a hovercraft: it carries its momentum and slides through turns,
 and hills slow it going up and speed it going down — enemies too. Shooting
 down a black hole (the orange ball) clears every enemy on the screen, as the
-bomb does. Power-ups are green balls inside two spinning rings.
+bomb does. Power-ups are green balls inside two spinning rings; orange ones
+are a shotgun — eight shells, shown along the bottom of the screen, each a
+blast of nine heavy pellets on the beat in place of the arpeggio, sounding a
+fat chord that echoes out. Every fallen tower leaves one.
 
 The picture grows with the music, like the hero of Rez: with the kick alone
 the game is a vector wireframe in one pale colour, like an old arcade
 cabinet; each layer of the song brings more back — colour, then surfaces
-fading in through a dither, then light and shadows, then full glow — and a
+fading in through a dither, then light and shadows, then full glow, each
+layer one whole step for contrast — and a
 death takes a layer of the picture with the layer of sound. Each change
 rolls out from the ship as a bright ring on the downbeat the layer comes in
 on, crossing the screen over a bar.

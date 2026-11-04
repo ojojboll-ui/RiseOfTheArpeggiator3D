@@ -55,7 +55,7 @@ namespace np::audio
 {
     struct Command
     {
-        enum Type : std::uint8_t { start, stop, pause, resume, kill, death, bomb, powerUp, blip, slow, setLayer, tower, finish };
+        enum Type : std::uint8_t { start, stop, pause, resume, kill, death, bomb, powerUp, blip, slow, setLayer, tower, finish, shotgun };
         Type  type = blip;
         int   a = 0, b = 0;      // start: song, arp direction. kill: chord slot, size. blip: note. slow: 1 on, 0 off. setLayer: layer (tools only)
                                  // tower: chord slot, 0 a tower fell or 1 the gate opened. finish: none (the ship left by the gate)
@@ -113,14 +113,14 @@ namespace np::audio
         std::atomic<std::int64_t> pubSample { 0 };
         std::atomic<double>       pubSamplesPerTick { 2700.0 };
         std::atomic<int>  pubLayer { 0 }, pubChord { 0 }, pubArpRate { 0 }, pubRateBars { 0 };
-        std::atomic<int>  pubBarsToLayer { kBarsPerLayer }, pubKicks { 0 }, pubSong { 0 }, pubArpDir { 0 }, pubSection { 0 };
+        std::atomic<int>  pubBarsToLayer { kBarsPerLayer }, pubKicks { 0 }, pubSong { 0 }, pubArpDir { 0 }, pubSection { 0 }, pubShells { 0 };
         std::atomic<bool> pubRunning { false }, pubDropped { false }, pubEnded { false };
         std::atomic<float> pubPeak { 0.0f };
 
         /** Which buses reach the output. For measuring one bus alone (the
             offline test does), never touched in the game. */
         enum Bus { busDrums = 1, busBass = 2, busArp = 4, busHits = 8, busPad = 16, busWet = 32, busSlowNoise = 64,
-                   busDrone = 128, busStrum = 256, busAll = 511 };
+                   busDrone = 128, busStrum = 256, busShot = 512, busAll = 1023 };
         int busMask = busAll;
 
         /** Beats since the song started, with the fraction — for visuals. */
@@ -164,6 +164,9 @@ namespace np::audio
             echoFall = std::pow (0.001f, 1.0f / (float) (sampleRate * 3.0));
             for (auto& v : arpJuno) v.prepare (sampleRate);
             for (auto& v : killVoices) v.prepare (sampleRate);
+            for (auto& v : shotVoices) { v.prepare (sampleRate); v.setPatch (shotgunPatch()); }
+            shotEcho.prepare (sampleRate);
+            shotEcho.setAmount (0.55f, 0.55f);
             reverb.prepare (sampleRate);
             riser.prepare (sampleRate);
             killPling.prepare (sampleRate);
@@ -245,6 +248,7 @@ namespace np::audio
             deathEcho.setTiming (current->bpm, 1);
             slowEcho.setTiming (current->bpm, 2);
             killEcho.setTiming (current->bpm, 1);
+            shotEcho.setTiming (current->bpm, 1);
             for (auto& v : arpJuno) v.setPatch (arpPluckPatch());
             for (auto& v : killVoices) v.setPatch (killPatch());
 
@@ -263,6 +267,7 @@ namespace np::audio
             pendingTower = 0;
             strumIndex = 8;
             lastStrumTick = -1000;
+            shotgunShells = 0;
             slowTarget = 0.0f;
             slowOctave = kSlowOpen;
             slowL.reset(); slowR.reset();
@@ -407,6 +412,7 @@ namespace np::audio
                         padOff();
                         // A power-up does not survive a death.
                         arpRate = 0; rateBars = 0;
+                        shotgunShells = 0;
                         break;
 
                     case Command::bomb:
@@ -415,6 +421,13 @@ namespace np::audio
                         // A swoosh right away, so the button is answered at once;
                         // the bang itself waits for the 32nd (2026-10-13).
                         if (running && ! ended) { pendingBomb = true; kit.trigger (PumpKit::swoosh, 1.0f); }
+                        break;
+
+                    case Command::shotgun:
+                        // Eight shells (2026-11-04): while they last and the
+                        // stick is out, a blast a beat instead of the arpeggio.
+                        shotgunShells = kShotgunShells;
+                        kit.trigger (PumpKit::perc, 0.9f);
                         break;
 
                     case Command::powerUp:
@@ -741,6 +754,17 @@ namespace np::audio
             wasFiring = fire;
             if (! fire) return;
 
+            // The shotgun: a blast on every beat instead of the arpeggio while
+            // there are shells (2026-11-04).
+            if (shotgunShells > 0)
+            {
+                if (k % kTicksPerBeat != 0) return;
+                playShotgun (chord);
+                postEvent ({ Event::shot, placeAbove (rootPc (chord), 48), chord, 50, 2 });
+                --shotgunShells;
+                return;
+            }
+
             static constexpr int divisions[3] { 4, 2, 1 };   // 1/8, 1/16, 1/32 in ticks
             if (k % divisions[arpRate] != 0) return;
 
@@ -756,6 +780,23 @@ namespace np::audio
                           aimPan.load (std::memory_order_relaxed));
             postEvent ({ Event::shot, note, chord, place, accent ? 1 : 0 });
             ++arpStep;
+        }
+
+        /** A shotgun blast: the chord, fat — six Juno voices across three
+            octaves on a brassy saw patch — with a thud under it, into an echo
+            of its own. Nothing like the arpeggio's pluck. */
+        void playShotgun (int slot) noexcept
+        {
+            const int root = placeAbove (rootPc (slot), 40);
+            const int third = chordThird (slot);
+            const int notes[6] { root, root + 7, root + 12, root + 12 + third, root + 19, root + 24 };
+            const int gate = (int) (samplesPerTick * kTicksPerBeat * 0.6);
+            for (int i = 0; i < 6; ++i)
+            {
+                shotVoices[(size_t) i].noteOff();
+                shotVoices[(size_t) i].noteOn (notes[i], i == 0 ? 1.0f : 0.85f, gate, ++order);
+            }
+            kit.trigger (PumpKit::boom, 0.45f);
         }
 
         int arpNote (int slot, int degree) const noexcept
@@ -1392,6 +1433,24 @@ namespace np::audio
                 l += al * gArp + hl * gHits;
                 r += ar * gArp + hr * gHits;
 
+                // The shotgun: the player's own, so unfiltered like the arpeggio,
+                // with its echo.
+                {
+                    float sl = 0.0f, sr = 0.0f;
+                    static constexpr float pans[6] { 0.5f, 0.35f, 0.65f, 0.3f, 0.7f, 0.5f };
+                    for (size_t k = 0; k < shotVoices.size(); ++k)
+                    {
+                        if (! shotVoices[k].isActive()) continue;
+                        const float x = shotVoices[k].process (0.0f, 0.62f, 0.25f, 1.0f);
+                        sl += x * std::cos (pans[k] * 1.5707963f);
+                        sr += x * std::sin (pans[k] * 1.5707963f);
+                    }
+                    shotEcho.process (sl, sr);
+                    const float g = (busMask & busShot) ? kShot : 0.0f;
+                    l += sl * g;
+                    r += sr * g;
+                }
+
                 // The bomb swoosh, after the filter, so it is never muffled.
                 {
                     float swl = 0.0f, swr = 0.0f;
@@ -1444,6 +1503,7 @@ namespace np::audio
             pubChord.store (chord);
             pubArpRate.store (arpRate);
             pubRateBars.store (rateBars);
+            pubShells.store (shotgunShells);
             pubBarsToLayer.store (kBarsPerLayer - barsSurvived);
             pubKicks.store (kicks);
             pubSong.store (songIndex);
@@ -1512,7 +1572,11 @@ namespace np::audio
         float pluckPan = 0.5f;
         std::array<JunoVoice, 4> pad;
         std::array<Ensemble, 2> padChorus;
-        TempoDelay delay, deathEcho, killEcho, slowEcho;
+        TempoDelay delay, deathEcho, killEcho, slowEcho, shotEcho;
+        std::array<JunoVoice, 6> shotVoices;
+        int shotgunShells = 0;
+        static constexpr int kShotgunShells = 8;
+        static constexpr float kShot = 0.70f;   // about 3 dB over the arpeggio (tools/audiotest; 0.30 sat 4 dB under it)
         Svf slowNoiseL, slowNoiseR;
         float brownL = 0.0f, brownR = 0.0f;
         std::uint32_t slowRngL = 0x68e31da4u, slowRngR = 0xb5297a4du;
