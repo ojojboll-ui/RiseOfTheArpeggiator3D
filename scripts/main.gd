@@ -645,7 +645,7 @@ func _draw_world(delta: float) -> void:
 	_fill(bullet_mm, game.bullet_buffer(BULLET_CAP))
 	_fill(spark_mm, game.spark_buffer(SPARK_CAP))
 	if _flag("--counts") and Engine.get_process_frames() % 60 == 0:
-		print("t %.1f wells %d clears %d slow %.2f sparks %d zone %d section %s towers %d gate %s phase %d score %d" % [clock, d.wells, d.clears, d.slow_amount, spark_mm.visible_instance_count,
+		print("t %.1f shells %d arp %d wells %d clears %d slow %.2f sparks %d zone %d section %s towers %d gate %s phase %d score %d" % [clock, d.shells, d.arp_rate, d.wells, d.clears, d.slow_amount, spark_mm.visible_instance_count,
 			d.zone, d.section_name, d.towers_left, d.gate_open, d.phase, d.score])
 	_fill(pickup_mm, game.pickup_buffer(PICKUP_CAP))
 	_fill(pickup_ring_mm, game.pickup_ring_buffer(PICKUP_CAP * 2))

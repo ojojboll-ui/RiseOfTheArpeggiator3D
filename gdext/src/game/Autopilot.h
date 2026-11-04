@@ -57,7 +57,22 @@ namespace np
                     if (d < best) { best = d; tower = &t; }
                 }
             }
-            const Vec2 goal = world.gateState().open ? world.gateState().pos : (tower ? tower->pos : lvl.start());
+            Vec2 goal = world.gateState().open ? world.gateState().pos : (tower ? tower->pos : lvl.start());
+
+            // A power-up in reach comes first (2026-11-04): the attract mode
+            // should show them being taken — the arpeggio speeding up, the
+            // shotgun firing.
+            const World::Pickup* pickup = nullptr;
+            {
+                float best = kPickupReach;
+                for (const auto& p : world.pickupList())
+                {
+                    if (! p.alive || p.life < 0.6f) continue;   // one about to vanish is not worth the trip
+                    const float d = (p.pos - me).length();
+                    if (d < best) { best = d; pickup = &p; }
+                }
+            }
+            if (pickup) goal = pickup->pos;
 
             flowTimer -= dt;
             if (flowTimer <= 0.0f) { flowTimer = 0.3f; lvl.updateFlow (flow, goal); }
@@ -68,7 +83,7 @@ namespace np
             else path = lvl.flowDirection (flow, me);
 
             // Near a tower: circle it at shooting distance instead of ramming it.
-            if (tower && ! world.gateState().open && goalD < 480.0f && lvl.lineOfSight (me, goal))
+            if (! pickup && tower && ! world.gateState().open && goalD < 480.0f && lvl.lineOfSight (me, goal))
             {
                 const Vec2 out = (me - tower->pos).normalised();
                 path = out.perp() * 0.9f + out * (goalD < 340.0f ? 0.7f : -0.2f);
@@ -76,7 +91,8 @@ namespace np
 
             // The stick pushed all the way in the direction it means to go, as a
             // player does, so the chord wheel follows it (2026-10-15).
-            c.move = flee + path * 0.9f;
+            // Heading for a pickup it flees less, so it gets there.
+            c.move = (pickup ? flee * 0.5f : flee) + path * (pickup ? 1.3f : 0.9f);
             if (c.move.length() > 0.05f) c.move = c.move.normalised();
 
             if (! reckless)
@@ -112,6 +128,7 @@ namespace np
             c.fire = true;
         }
 
+        static constexpr float kPickupReach = 1800.0f;   // about a screen
         std::vector<World::Threat> seen;
         Level::Flow flow;
         float time = 0.0f, bombCooldown = 0.0f, flowTimer = 0.0f;
