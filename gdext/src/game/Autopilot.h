@@ -116,6 +116,26 @@ namespace np
             }
             bombCooldown -= dt;
 
+            // Slow motion now and then (2026-11-05), as a player would: when it
+            // gets crowded round the ship, or a tower is being shot at close
+            // range, with the meter well filled — held two to three seconds,
+            // then not again for a while.
+            {
+                int close = 0;
+                for (const auto& t : seen)
+                    if (t.live && (t.pos - me).length() < 450.0f) ++close;
+                const bool towerFight = tower && goalD < 650.0f;
+                if (slowHold > 0.0f) { slowHold -= dt; c.slow = true; }
+                else if (slowCooldown <= 0.0f && world.slowMeterValue() > 0.5f && ! reckless
+                         && (close >= 5 || (towerFight && close >= 2)))
+                {
+                    slowHold = 2.0f + 1.0f * (float) (close % 2);
+                    slowCooldown = 9.0f;
+                    c.slow = true;
+                }
+                slowCooldown -= dt;
+            }
+
             if (slowTest) c.slow = std::fmod (time, 12.0f) > 9.0f;
 
             return c;
@@ -132,5 +152,6 @@ namespace np
         std::vector<World::Threat> seen;
         Level::Flow flow;
         float time = 0.0f, bombCooldown = 0.0f, flowTimer = 0.0f;
+        float slowHold = 0.0f, slowCooldown = 6.0f;
     };
 }
