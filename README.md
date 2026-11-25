@@ -30,14 +30,21 @@ are a shotgun — eight shells, shown along the bottom of the screen, each a
 blast of nine heavy pellets on the beat in place of the arpeggio, sounding a
 fat chord that echoes out. Every fallen tower leaves one.
 
-The picture grows with the music, like the hero of Rez: with the kick alone
-the game is a vector wireframe in one pale colour, like an old arcade
-cabinet; each layer of the song brings more back — colour, then surfaces
-fading in through a dither, then light and shadows, then full glow, each
-layer one whole step for contrast — and a
-death takes a layer of the picture with the layer of sound. Each change
-rolls out from the ship as a bright ring on the downbeat the layer comes in
-on, crossing the screen over a bar.
+The picture grows with the music, from dark and desolate to a whole
+tivoli. With the kick alone only the ship and the enemies glow, and the
+ship carries a light that pulses on the kick and shows the ground round it;
+the walls are a faint night line. Then the enemies brighten (bass), wall
+edges flicker on like neon tubes (hat), the walls light up whole and pulse
+(16ths), the floor grid comes on (drone), the floor takes its zone's colour
+(open hat), it dances in cells that change on the beat (pad), shots leave
+light in the floor that fades over a bar (clap), and with the strum towers,
+doors and the gate get chasing strings of bulbs, colour rings run out from
+the ship and explosions light the floor. A death takes a layer of the
+picture with the layer of sound, its lights stuttering like a power cut.
+Each change rolls out from the ship as a bright ring on the downbeat the
+layer comes in on, crossing the screen over a bar. The earlier wireframe
+evolution (a pale vector picture filling in with colour, surfaces and
+light) is kept behind `--oldlook`.
 
 Slow motion leaves trails behind everything that shines.
 
@@ -93,7 +100,7 @@ zonepreview ..\..\out` renders each song through its sections.
 
 The game takes flags after `--`: `--demo` (the autopilot plays), `--level N`,
 `--difficulty easy|normal|hard`, `--seconds T`, `--shots DIR --every S`
-(screenshots), `--wav PATH`, `--reckless`, `--slowtest`, `--counts`, `--lookexit`, `--pickup`. `snap.sh` wraps them.
+(screenshots), `--wav PATH`, `--reckless`, `--slowtest`, `--counts`, `--lookexit`, `--pickup`, `--oldlook`, `--look N` (hold the picture at stage N). `snap.sh` wraps them.
 
 ## Layout
 

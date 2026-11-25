@@ -50,3 +50,11 @@ sweep_radius={
 "type": "float",
 "value": 1000.0
 }
+look_style={
+"type": "float",
+"value": 0.0
+}
+look_power={
+"type": "float",
+"value": 1.0
+}

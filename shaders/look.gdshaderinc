@@ -71,3 +71,35 @@ float bayer4(vec2 p) {
 	ivec2 q = ivec2(mod(p, 4.0));
 	return (m[q.x + q.y * 4] + 0.5) / 16.0;
 }
+
+// ---------------------------------------------------------------------------
+// Dark to tivoli (2026-11-25), the default; the wireframe above is look_style 1
+// (--oldlook). The level starts black: only the ship and the enemies glow, and
+// the ship's own light, pulsing on the kick, shows the ground round it. Walls
+// barely there as a night line. Then, layer by layer: the enemies brighter (1),
+// wall edges flickering on like neon tubes (2), whole walls pulsing (3), the
+// floor grid (4), the floor in its zone's colour (5), a dancing floor (6),
+// light where shots pass (7), and the tivoli (8). look_power flickers towards
+// nothing when a layer is lost, like a power cut.
+global uniform float look_style;
+global uniform float look_power;
+
+bool old_look() { return look_style > 0.5; }
+float stage(float l, float s) { return step(s - 0.01, l); }
+float look_hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+// A neon tube that is coming on stutters for a few metres behind the
+// wavefront that brings it.
+float tube(float l, float s, vec3 world, float seed) {
+	float on = stage(l, s);
+	if (on > 0.0 && look_from < s - 0.01 && look_to >= s - 0.01) {
+		float behind = sweep_radius - sweep_distance(world);
+		if (behind < 5.0)
+			on *= step(0.45 * (1.0 - behind / 5.0), look_hash(vec2(floor(TIME * 22.0), seed)));
+	}
+	return on;
+}
+
+vec3 hue(float h) {
+	return clamp(abs(fract(h + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+}

@@ -524,6 +524,49 @@ PackedByteArray ArpGame::floor_bytes() const
     return out;
 }
 
+
+PackedByteArray ArpGame::paint_bytes (double dtIn, bool sparks)
+{
+    const np::Grid& g = view()->floor();
+    const int cols = g.columns(), rows = g.rowCount();
+    const size_t n = (size_t) cols * (size_t) rows * 4;
+    if (paint.size() != n) paint.assign (n, 0.0f);
+
+    const float dt = (float) dtIn;
+    const float keep = std::exp (-dt / 0.55f);   // about a bar to fade out
+    for (auto& x : paint) x *= keep;
+
+    auto splat = [&] (Vec2 p, np::Color c, float w)
+    {
+        const float fx = (p.x - g.left()) / g.spacingX(), fy = (p.y - g.top()) / g.spacingY();
+        const int c0 = (int) std::floor (fx), r0 = (int) std::floor (fy);
+        const float tx = fx - (float) c0, ty = fy - (float) r0;
+        for (int dr = 0; dr < 2; ++dr)
+            for (int dc = 0; dc < 2; ++dc)
+            {
+                const int cc = c0 + dc, rr = r0 + dr;
+                if (cc < 0 || rr < 0 || cc >= cols || rr >= rows) continue;
+                const float k = w * (dc ? tx : 1.0f - tx) * (dr ? ty : 1.0f - ty);
+                float* q = &paint[((size_t) rr * (size_t) cols + (size_t) cc) * 4];
+                q[0] = std::min (q[0] + c.r * k, 2.0f);
+                q[1] = std::min (q[1] + c.g * k, 2.0f);
+                q[2] = std::min (q[2] + c.b * k, 2.0f);
+                q[3] = std::min (q[3] + k, 2.0f);
+            }
+    };
+
+    for (const auto& b : view()->bulletList())
+        if (b.alive) splat (b.pos, np::World::chordColor (b.chord), (b.heavy ? 3.0f : 1.2f) * dt);
+    if (sparks)
+        for (const auto& p : view()->particleList())
+            if (p.life > 0.0f) splat (p.pos, p.color, 0.5f * dt);
+
+    PackedByteArray out;
+    out.resize ((int64_t) (n * sizeof (float)));
+    std::memcpy (out.ptrw(), paint.data(), n * sizeof (float));
+    return out;
+}
+
 int ArpGame::floor_columns() const { return view()->floor().columns(); }
 int ArpGame::floor_rows() const { return view()->floor().rowCount(); }
 
@@ -760,6 +803,7 @@ void ArpGame::_bind_methods()
     ClassDB::bind_method (D_METHOD ("floor_bytes"), &ArpGame::floor_bytes);
     ClassDB::bind_method (D_METHOD ("floor_columns"), &ArpGame::floor_columns);
     ClassDB::bind_method (D_METHOD ("floor_rows"), &ArpGame::floor_rows);
+    ClassDB::bind_method (D_METHOD ("paint_bytes", "dt", "sparks"), &ArpGame::paint_bytes);
     ClassDB::bind_method (D_METHOD ("field_size"), &ArpGame::field_size);
     ClassDB::bind_method (D_METHOD ("floor_height", "at"), &ArpGame::floor_height);
     ClassDB::bind_method (D_METHOD ("to_3d", "p"), &ArpGame::to_3d);

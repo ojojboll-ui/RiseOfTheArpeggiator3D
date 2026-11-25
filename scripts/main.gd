@@ -46,6 +46,15 @@ var sweep_time := 1000.0            # seconds since the last sweep began
 var sweep_origin := Vector3.ZERO
 const SWEEP_REACH := 32.0           # metres: past every corner of the screen
 const MENU_LOOK := 1.5              # the menu: coloured wireframe, an arcade cabinet's attract screen
+const MENU_LOOK_NEW := 3.0          # the menu in the new look: walls lit, floor dark
+# Dark to tivoli (2026-11-25) is the look; --oldlook brings back the wireframe.
+var old_look := false
+var ship_light: OmniLight3D
+var power_cut := 0.0                # seconds left of the flicker when a layer is lost
+var beat_count := 0.0
+var last_kick := 0.0
+var paint_img: Image
+var paint_tex: ImageTexture
 var pad := Pad.new()
 var hud: Control
 var postfx: ColorRect
@@ -102,6 +111,9 @@ const BEST_PATH := "user://best.json"
 func _ready() -> void:
 	_parse_args()
 	_load_best()
+	old_look = _flag("--oldlook")
+	RenderingServer.global_shader_parameter_set("look_style", 1.0 if old_look else 0.0)
+	RenderingServer.global_shader_parameter_set("look_power", 1.0)
 
 	game = ArpGame.new()
 	add_child(game)
@@ -176,6 +188,15 @@ func _build_scene() -> void:
 	sun.shadow_enabled = true
 	sun.directional_shadow_max_distance = 30.0
 	add_child(sun)
+
+	# The ship's own light, pulsing on the kick: in the new look's dark start
+	# all there is to see the ground by.
+	ship_light = OmniLight3D.new()
+	ship_light.omni_range = 7.0
+	ship_light.omni_attenuation = 1.4
+	ship_light.light_energy = 0.0
+	ship_light.shadow_enabled = false
+	add_child(ship_light)
 
 	# The 3D world is drawn into a viewport of its own, so the trails can be
 	# made from it without the HUD (which the root viewport draws on top).
@@ -290,6 +311,9 @@ func _build_level() -> void:
 	floor_mat.set_shader_parameter("info", ImageTexture.create_from_image(info))
 	floor_mat.set_shader_parameter("info_dims", Vector2(ic, ir))
 	floor_mat.set_shader_parameter("info_cell", map.x / ic)
+	paint_img = Image.create_from_data(wc, wr, false, Image.FORMAT_RGBAF, game.paint_bytes(0.0, false))
+	paint_tex = ImageTexture.create_from_image(paint_img)
+	floor_mat.set_shader_parameter("paint", paint_tex)
 	var floor_node := MeshInstance3D.new()
 	floor_node.mesh = plane
 	floor_node.material_override = floor_mat
@@ -320,6 +344,7 @@ func _build_level() -> void:
 		for faces in groups[zone]:
 			st.append_from(Meshes.solid(faces), 0, Transform3D.IDENTITY)
 		var mat := _neon_material(false)
+		mat.set_shader_parameter("role", 1)
 		mat.set_shader_parameter("body_energy", 0.06)
 		mat.set_shader_parameter("albedo_amount", 0.07)
 		mat.set_shader_parameter("edge_energy", 3.2)
@@ -336,6 +361,7 @@ func _build_level() -> void:
 	for t in game.tower_states():
 		var mat := _neon_material(false)
 		mat.set_shader_parameter("base_color", t.color)
+		mat.set_shader_parameter("role", 2)
 		mat.set_shader_parameter("body_energy", 0.45)
 		mat.set_shader_parameter("edge_energy", 5.0)
 		var node := MeshInstance3D.new()
@@ -355,6 +381,7 @@ func _build_level() -> void:
 	for door in game.door_states():
 		var mat := _neon_material(false)
 		mat.set_shader_parameter("base_color", door.color)
+		mat.set_shader_parameter("role", 2)
 		# Each segment's edges glow, so they are kept faint: the ring reads as one wall.
 		mat.set_shader_parameter("body_energy", 0.45)
 		mat.set_shader_parameter("edge_energy", 0.9)
@@ -369,6 +396,7 @@ func _build_level() -> void:
 
 	# The gate.
 	gate_mat = _neon_material(false)
+	gate_mat.set_shader_parameter("role", 2)
 	gate_mat.set_shader_parameter("body_energy", 0.6)
 	gate_mat.set_shader_parameter("edge_energy", 6.0)
 	gate_node = MeshInstance3D.new()
@@ -601,7 +629,14 @@ func _draw_world(delta: float) -> void:
 	# wavefront, starting when the layer comes in on its downbeat and running
 	# out at an even speed over a bar (two beats with an ease-out crossed the
 	# screen in a tenth of a second: too fast to see).
-	var want_look: float = float(d.layer) * 8.0 / max(1.0, float(d.max_layer)) if playing else MENU_LOOK
+	var want_look: float = float(d.layer) * 8.0 / max(1.0, float(d.max_layer)) if playing else (MENU_LOOK if old_look else MENU_LOOK_NEW)
+	if not old_look:
+		want_look = round(want_look)   # the new look's stages are whole layers
+	var forced := OS.get_cmdline_user_args().find("--look")
+	if forced >= 0 and forced + 1 < OS.get_cmdline_user_args().size():
+		want_look = float(OS.get_cmdline_user_args()[forced + 1])
+	if playing and want_look < look_to:
+		power_cut = 0.7   # a layer lost: the lights stutter like a power cut
 	if not playing:
 		look_from = want_look
 		look_to = want_look
@@ -627,17 +662,47 @@ func _draw_world(delta: float) -> void:
 	# light (where nothing has a surface yet it lights nothing), shadows from
 	# the pad, glow from the hat, the most at the top.
 	var look := maxf(look_from, look_to)
-	var lit := clampf(look - 4.0, 0.0, 1.0)
-	sun.shadow_enabled = look >= 5.5   # the pad, layer 6
-	sun.light_energy = 1.1 * lit
-	env.ambient_light_energy = 0.12 * lit
-	env.glow_intensity = 0.12 if look < 2.0 else (0.22 if look < 6.5 else 0.34)   # the hat (2) brings glow, the clap (7) the most
+	if old_look:
+		var lit := clampf(look - 4.0, 0.0, 1.0)
+		sun.shadow_enabled = look >= 5.5   # the pad, layer 6
+		sun.light_energy = 1.1 * lit
+		env.ambient_light_energy = 0.12 * lit
+		env.glow_intensity = 0.12 if look < 2.0 else (0.22 if look < 6.5 else 0.34)   # the hat (2) brings glow, the clap (7) the most
+		ship_light.light_energy = 0.0
+	else:
+		# Night until the floor comes on; a little moonlight with the open hat,
+		# shadows and more with the pad, full light only for the tivoli.
+		sun.shadow_enabled = look >= 5.5
+		sun.light_energy = 0.0 if look < 4.5 else (0.1 if look < 5.5 else (0.2 if look < 7.5 else 0.35))
+		env.ambient_light_energy = 0.015 + 0.01 * look
+		env.glow_intensity = 0.3 if look < 7.5 else 0.38
+	# The ship's light: the kick's pulse, in the colour of the chord.
+	ship_light.visible = not old_look and playing and game.ship_visible()
+	if ship_light.visible:
+		ship_light.position = game.ship_position() + Vector3(0, 1.1, 0)
+		ship_light.light_color = Color(1.0, 0.95, 0.85).lerp(d.chord_colors[d.chord], 0.4)
+		ship_light.light_energy = 1.2 + 3.5 * float(d.kick)
+	# A lost layer's power cut.
+	var power := 1.0
+	if power_cut > 0.0:
+		power_cut -= delta
+		power = 0.12 if randf() < 0.45 else 1.0
+	RenderingServer.global_shader_parameter_set("look_power", power)
 	d.gate = game.gate_state()
 
 	# Floor waves.
 	wave_img.set_data(game.floor_columns(), game.floor_rows(), false, Image.FORMAT_RF, game.floor_bytes())
 	wave_tex.update(wave_img)
 	floor_mat.set_shader_parameter("kick", d.kick)
+	# Light the shots leave, and the beat the dance floor changes on.
+	if not old_look:
+		paint_img.set_data(game.floor_columns(), game.floor_rows(), false, Image.FORMAT_RGBAF, game.paint_bytes(delta, look >= 7.5))
+		paint_tex.update(paint_img)
+		if float(d.kick) > last_kick + 0.3:
+			beat_count += 1.0
+		last_kick = float(d.kick)
+		floor_mat.set_shader_parameter("beat", beat_count)
+		floor_mat.set_shader_parameter("ship", game.ship_position())
 
 	# Instances.
 	for k in enemy_mm.size():

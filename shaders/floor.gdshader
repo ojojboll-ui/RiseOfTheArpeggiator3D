@@ -28,6 +28,9 @@ uniform float kick = 0.0;
 uniform float line_energy = 1.6;
 uniform float line_px = 1.3;
 uniform float grid_cell = 0.4;
+uniform sampler2D paint : filter_linear, repeat_disable;   // rgb light shots left, at the wave grid
+uniform float beat = 0.0;
+uniform vec3 ship = vec3(0.0);
 
 varying vec3 world;
 varying float wave;
@@ -81,17 +84,39 @@ void fragment() {
 
 	float l = look_at(world);
 	float band = sweep_band(world);
-	float fill = look_fill(l);
-	if (line < 0.015 && band < 0.1 && bayer4(FRAGCOORD.xy) >= fill)
-		discard;
+	if (old_look()) {
+		float fill = look_fill(l);
+		if (line < 0.015 && band < 0.1 && bayer4(FRAGCOORD.xy) >= fill)
+			discard;
 
-	// Lit enough that the facets of the hills catch the light differently.
-	ALBEDO = mix(vec3(0.012, 0.014, 0.03), zone.rgb * 0.16, 0.55) * look_lit(l);
-	ROUGHNESS = 0.6;
-	METALLIC = 0.2;
-	// Brighter lines while they are all there is; the sweep's wavefront a
-	// bright ring running over the floor, brightest on the lines.
-	vec3 lc = look_tint(zone.rgb, l);
-	EMISSION = lc * line * line_energy * (1.0 + 0.4 * (1.0 - fill))
-	         + look_tint(zone.rgb, look_to) * (band * (0.08 + 2.2 * max(minor, major)) + sweep_core(world) * 3.0);
+		// Lit enough that the facets of the hills catch the light differently.
+		ALBEDO = mix(vec3(0.012, 0.014, 0.03), zone.rgb * 0.16, 0.55) * look_lit(l);
+		ROUGHNESS = 0.6;
+		METALLIC = 0.2;
+		// Brighter lines while they are all there is; the sweep's wavefront a
+		// bright ring running over the floor, brightest on the lines.
+		vec3 lc = look_tint(zone.rgb, l);
+		EMISSION = lc * line * line_energy * (1.0 + 0.4 * (1.0 - fill))
+		         + look_tint(zone.rgb, look_to) * (band * (0.08 + 2.2 * max(minor, major)) + sweep_core(world) * 3.0);
+	} else {
+		// Dark ground the ship's light shows; the floor's own light comes late.
+		ALBEDO = mix(vec3(0.04, 0.045, 0.06), zone.rgb * 0.15, 0.3);
+		ROUGHNESS = 0.6;
+		METALLIC = 0.2;
+		vec3 grid_c = mix(vec3(0.55, 0.6, 0.7), zone.rgb, stage(l, 5.0));
+		float lines = line * (0.45 * stage(l, 4.0) + 0.55 * stage(l, 5.0));
+		vec3 e = grid_c * lines * line_energy;
+		e += zone.rgb * 0.012 * stage(l, 5.0);
+		// The dance floor: big cells light at random, a new set each beat.
+		float cell_on = step(0.78, look_hash(floor(cm) + vec2(beat * 3.1, beat * 1.7)));
+		e += zone.rgb * cell_on * (0.05 + 0.16 * kick) * stage(l, 6.0);
+		// Light the shots leave behind.
+		vec4 p = texture(paint, (world.xz / wave_cell + 0.5) / wave_dims);
+		e += p.rgb * 0.55 * stage(l, 7.0);
+		// The tivoli: colour rings running out from the ship.
+		float r = distance(world.xz, ship.xz);
+		e += hue(r * 0.05 - TIME * 0.25) * (0.5 + 0.5 * sin(r * 1.2 - TIME * 5.0)) * 0.05 * stage(l, 8.0);
+		EMISSION = e * look_power
+		         + zone.rgb * (band * (0.06 + 1.6 * max(minor, major)) + sweep_core(world) * 2.0);
+	}
 }

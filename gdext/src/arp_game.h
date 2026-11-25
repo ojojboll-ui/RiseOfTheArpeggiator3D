@@ -90,6 +90,9 @@ public:
     int hill_rows() const;
     float hill_cell() const;                   // metres between hill points
     PackedByteArray floor_info_bytes() const;  // RGBA8: zone colour, alpha open floor
+    // Light the shots leave in the floor (2026-11-25): RGBA float at the wave grid,
+    // decaying over about a bar. Sparks splat too when `sparks` is on.
+    PackedByteArray paint_bytes (double dt, bool sparks);
     int info_columns() const;
     int info_rows() const;
     PackedFloat32Array level_rim() const;      // per edge: ax, az, bx, bz, outward x, outward z (metres)
@@ -126,6 +129,7 @@ private:
     bool died = false, bombed = false;
     float lastAngle = 0.0f, bank = 0.0f;
     mutable int lastCount = 0;
+    std::vector<float> paint;
 };
 
 } // namespace godot
