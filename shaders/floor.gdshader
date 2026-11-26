@@ -30,6 +30,9 @@ uniform float line_px = 1.3;
 uniform float grid_cell = 0.4;
 uniform sampler2D paint : filter_linear, repeat_disable;   // rgb light shots left, at the wave grid
 uniform float beat = 0.0;
+uniform float beat_phase = 0.0;   // 0 on the beat, 1 at the next
+uniform vec4 strum_rings[4];      // x, z where a strum ring started, its age in seconds (negative: none)
+uniform vec4 strum_colors[4] : source_color;
 uniform vec3 ship = vec3(0.0);
 
 varying vec3 world;
@@ -107,15 +110,26 @@ void fragment() {
 		float lines = line * (0.45 * stage(l, 4.0) + 0.55 * stage(l, 5.0));
 		vec3 e = grid_c * lines * line_energy;
 		e += zone.rgb * 0.012 * stage(l, 5.0);
-		// The dance floor: big cells light at random, a new set each beat.
-		float cell_on = step(0.78, look_hash(floor(cm) + vec2(beat * 3.1, beat * 1.7)));
-		e += zone.rgb * cell_on * (0.05 + 0.16 * kick) * stage(l, 6.0);
+		// The dance floor: big cells light at random, a new set each beat,
+		// each glowing on and fading out over the next few beats.
+		float dance = 0.0;
+		for (int k = 0; k < 4; k++) {
+			float b = beat - float(k);
+			float on = step(0.8, look_hash(floor(cm) + vec2(b * 3.1, b * 1.7)));
+			dance += on * exp(-(float(k) + beat_phase) * 0.9);
+		}
+		e += zone.rgb * dance * (0.14 + 0.12 * kick) * stage(l, 6.0);
 		// Light the shots leave behind.
 		vec4 p = texture(paint, (world.xz / wave_cell + 0.5) / wave_dims);
 		e += p.rgb * 0.55 * stage(l, 7.0);
-		// The tivoli: colour rings running out from the ship.
-		float r = distance(world.xz, ship.xz);
-		e += hue(r * 0.05 - TIME * 0.25) * (0.5 + 0.5 * sin(r * 1.2 - TIME * 5.0)) * 0.05 * stage(l, 8.0);
+		// The strum: a glowing ring runs out from the ship on every chord.
+		for (int k = 0; k < 4; k++) {
+			float age = strum_rings[k].z;
+			if (age < 0.0 || age > 3.0) continue;
+			float d = distance(world.xz, strum_rings[k].xy) - age * 8.0;
+			float ring = exp(-d * d / 0.18) * exp(-age * 1.1);
+			e += strum_colors[k].rgb * ring * (0.5 + 1.2 * max(minor, major)) * stage(l, 8.0);
+		}
 		EMISSION = e * look_power
 		         + zone.rgb * (band * (0.06 + 1.6 * max(minor, major)) + sweep_core(world) * 2.0);
 	}

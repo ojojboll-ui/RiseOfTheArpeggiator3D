@@ -53,6 +53,11 @@ var ship_light: OmniLight3D
 var power_cut := 0.0                # seconds left of the flicker when a layer is lost
 var beat_count := 0.0
 var last_kick := 0.0
+var beat_time := 0.0
+var strum_rings: Array[Vector4] = [Vector4(0, 0, -1, 0), Vector4(0, 0, -1, 0), Vector4(0, 0, -1, 0), Vector4(0, 0, -1, 0)]
+var strum_colors: Array[Color] = [Color.WHITE, Color.WHITE, Color.WHITE, Color.WHITE]
+var strum_next := 0
+var last_chord := -1
 var paint_img: Image
 var paint_tex: ImageTexture
 var pad := Pad.new()
@@ -675,7 +680,7 @@ func _draw_world(delta: float) -> void:
 		sun.shadow_enabled = look >= 5.5
 		sun.light_energy = 0.0 if look < 4.5 else (0.1 if look < 5.5 else (0.2 if look < 7.5 else 0.35))
 		env.ambient_light_energy = 0.015 + 0.01 * look
-		env.glow_intensity = 0.3 if look < 7.5 else 0.38
+		env.glow_intensity = 0.3 if look < 6.5 else 0.26   # less glow at the top: the floor is bright enough
 	# The ship's light: the kick's pulse, in the colour of the chord.
 	ship_light.visible = not old_look and playing and game.ship_visible()
 	if ship_light.visible:
@@ -696,10 +701,25 @@ func _draw_world(delta: float) -> void:
 	floor_mat.set_shader_parameter("kick", d.kick)
 	# Light the shots leave, and the beat the dance floor changes on.
 	if not old_look:
-		paint_img.set_data(game.floor_columns(), game.floor_rows(), false, Image.FORMAT_RGBAF, game.paint_bytes(delta, look >= 7.5))
+		paint_img.set_data(game.floor_columns(), game.floor_rows(), false, Image.FORMAT_RGBAF, game.paint_bytes(delta, false))
 		paint_tex.update(paint_img)
 		if float(d.kick) > last_kick + 0.3:
 			beat_count += 1.0
+			beat_time = 0.0
+		beat_time += delta
+		floor_mat.set_shader_parameter("beat_phase", clampf(beat_time / (beats * 0.25), 0.0, 1.0))
+		# The strum plays on chord changes: each sends a glowing ring out from the ship.
+		if playing and int(d.chord) != last_chord and last_chord >= 0:
+			var at := game.ship_position()
+			strum_rings[strum_next] = Vector4(at.x, at.z, 0.0, 0.0)
+			strum_colors[strum_next] = d.chord_colors[d.chord]
+			strum_next = (strum_next + 1) % 4
+		last_chord = int(d.chord)
+		for i in 4:
+			if strum_rings[i].z >= 0.0:
+				strum_rings[i].z += delta
+		floor_mat.set_shader_parameter("strum_rings", strum_rings)
+		floor_mat.set_shader_parameter("strum_colors", strum_colors)
 		last_kick = float(d.kick)
 		floor_mat.set_shader_parameter("beat", beat_count)
 		floor_mat.set_shader_parameter("ship", game.ship_position())
